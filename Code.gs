@@ -112,26 +112,75 @@ function enforceSingleSelect(sheet, range) {
 }
 
 function initialize() {
-  const games = fetchSchedule();
+  const result = fetchSchedule();
+  const games = result.games;
+
+  if (!games.length) {
+    const detail = result.diagnostics.slice(0, 5).join('\n');
+    SpreadsheetApp.getUi().alert(
+      'Loaded 0 games for the ' + SEASON + ' season - the schedule fetch failed.\n\n' +
+      'Details from the first few weeks:\n' + detail +
+      '\n\nCheck that SEASON in Code.gs matches a season ESPN has published, then run Initialize again.'
+    );
+    return;
+  }
+
   const weather = computeStadiumAndWeather(games);
   buildScheduleSheet(games, weather);
   computeResults();
-  SpreadsheetApp.getUi().alert(
-    'Loaded ' + games.length + ' games for the ' + SEASON + ' season, ' +
+
+  let msg = 'Loaded ' + games.length + ' games for the ' + SEASON + ' season, ' +
     'with stadium type and historical average weather.\n' +
-    'Now use "NFL Picks > Add Member" for each person in your league.'
-  );
+    'Now use "NFL Picks > Add Member" for each person in your league.';
+  if (result.diagnostics.length) {
+    msg += '\n\n(' + result.diagnostics.length + ' week(s) had issues - see Apps Script logs for details.)';
+    result.diagnostics.forEach(function (d) { console.log(d); });
+  }
+  SpreadsheetApp.getUi().alert(msg);
 }
 
+/**
+ * Returns { games, diagnostics }. diagnostics lists any week that didn't
+ * yield events (HTTP status and a snippet of the response), so failures are
+ * visible instead of silently producing an empty schedule.
+ */
 function fetchSchedule() {
   const games = [];
+  const diagnostics = [];
+  const options = {
+    muteHttpExceptions: true,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      'Accept': 'application/json',
+    },
+  };
   for (let week = 1; week <= 18; week++) {
     const url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard' +
       '?dates=' + SEASON + '&seasontype=2&week=' + week;
-    const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-    if (resp.getResponseCode() !== 200) continue;
-    const data = JSON.parse(resp.getContentText());
-    (data.events || []).forEach(function (event) {
+    let resp;
+    try {
+      resp = UrlFetchApp.fetch(url, options);
+    } catch (err) {
+      diagnostics.push('Week ' + week + ': request failed - ' + err);
+      continue;
+    }
+    const code = resp.getResponseCode();
+    if (code !== 200) {
+      diagnostics.push('Week ' + week + ': HTTP ' + code + ' - ' + resp.getContentText().slice(0, 200));
+      continue;
+    }
+    let data;
+    try {
+      data = JSON.parse(resp.getContentText());
+    } catch (err) {
+      diagnostics.push('Week ' + week + ': bad JSON - ' + resp.getContentText().slice(0, 200));
+      continue;
+    }
+    const events = data.events || [];
+    if (!events.length) {
+      diagnostics.push('Week ' + week + ': HTTP 200 but 0 events in response');
+    }
+    events.forEach(function (event) {
       const comp = event.competitions[0];
       const home = comp.competitors.filter(function (c) { return c.homeAway === 'home'; })[0];
       const away = comp.competitors.filter(function (c) { return c.homeAway === 'away'; })[0];
@@ -144,7 +193,7 @@ function fetchSchedule() {
     });
     Utilities.sleep(150);
   }
-  return games;
+  return { games: games, diagnostics: diagnostics };
 }
 
 /**
