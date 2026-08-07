@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: Arial, sans-serif; padding: 14px; font-size: 13px; }
+    #status { margin-bottom: 8px; }
+    #progress { color: #666; font-size: 12px; }
+    button { margin-top: 12px; padding: 6px 14px; }
+  </style>
+</head>
+<body>
+  <div id="status">Fetching the <?= season ?> schedule from ESPN, from your browser&hellip;</div>
+  <div id="progress">Starting&hellip;</div>
+  <button id="closeBtn" style="display:none" onclick="google.script.host.close()">Close</button>
+
+  <script>
+    const SEASON = <?= season ?>;
+
+    async function fetchWeek(week) {
+      const url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard'
+        + '?dates=' + SEASON + '&seasontype=2&week=' + week;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json();
+    }
+
+    async function run() {
+      const games = [];
+      const problems = [];
+
+      for (let week = 1; week <= 18; week++) {
+        document.getElementById('progress').textContent = 'Week ' + week + ' of 18…';
+        try {
+          const data = await fetchWeek(week);
+          const events = data.events || [];
+          events.forEach(function (event) {
+            const comp = event.competitions[0];
+            const home = comp.competitors.find(function (c) { return c.homeAway === 'home'; });
+            const away = comp.competitors.find(function (c) { return c.homeAway === 'away'; });
+            games.push({
+              week: week,
+              date: event.date,
+              awayName: away.team.displayName,
+              homeName: home.team.displayName,
+            });
+          });
+        } catch (err) {
+          problems.push('Week ' + week + ': ' + err.message);
+        }
+      }
+
+      document.getElementById('status').textContent =
+        'Got ' + games.length + ' games. Saving to the sheet…';
+      document.getElementById('progress').textContent = '';
+
+      google.script.run
+        .withSuccessHandler(function (result) {
+          document.getElementById('status').textContent = result.message;
+          document.getElementById('closeBtn').style.display = 'inline-block';
+        })
+        .withFailureHandler(function (err) {
+          document.getElementById('status').textContent = 'Error saving schedule: ' + err.message;
+          document.getElementById('closeBtn').style.display = 'inline-block';
+        })
+        .receiveScheduleFromClient(JSON.stringify(games), JSON.stringify(problems));
+    }
+
+    run();
+  </script>
+</body>
+</html>
