@@ -5,26 +5,37 @@
  * regular-season NFL game, and this derives who each person picked to win
  * each of the 8 divisions, then tallies votes across the whole league.
  *
+ * Each member gets their own tab, edit-protected so only they (and the
+ * spreadsheet owner) can change it. Note: Google Sheets has no way to hide
+ * one tab from specific viewers within a single shared file - protection
+ * only controls who can EDIT a tab, not who can see it. Anyone with access
+ * to this spreadsheet can see every member's tab; they just can't edit
+ * anyone else's.
+ *
  * Setup (run once from the "NFL Picks" menu after opening the sheet):
- *   1. Initialize (fetch schedule) - also pulls stadium type and historical
- *      average weather for each game.
- *   2. Add Member  (repeat once per league member)
- *   3. Share the sheet with the league; everyone checks a box on the
- *      "Schedule" tab. "Division Winners" and "Tally" update automatically
- *      as picks come in.
+ *   1. Initialize (fetch schedule) - builds the read-only master Schedule
+ *      tab with stadium type and historical average weather for each game.
+ *   2. Add Member (repeat once per league member) - creates that member's
+ *      own picks tab, copied from the master schedule, and locks it so only
+ *      that member can edit it.
+ *   3. Share the spreadsheet (Editor access) with the league. Each member
+ *      checks boxes on their own tab. "Division Winners" and "Tally" update
+ *      automatically as picks come in.
  */
 
 const SEASON = 2026;
 const SCHEDULE_SHEET = 'Schedule';
 const DIVWIN_SHEET = 'Division Winners';
 const TALLY_SHEET = 'Tally';
-
-// Schedule layout: two header rows, then games starting row 3.
-// Cols: 1 Week, 2 Date, 3 Away, 4 Home, 5 Stadium Type, 6 Avg Temp, 7 Avg Precip,
-// then two columns per member (Away checkbox, Home checkbox) starting at col 8.
-const FIRST_DATA_ROW = 3;
-const MEMBER_START_COL = 8;
+const MEMBERS_SHEET = 'Members';
 const WEATHER_HISTORY_YEARS = 5;
+
+// Schedule/member tab layout: one header row, then games starting row 2.
+const STATIC_HEADERS = ['Week', 'Date', 'Away', 'Home', 'Stadium Type', 'Avg Temp', 'Snow Chance'];
+const FIRST_DATA_ROW = 2;
+const PICK_AWAY_COL = 8;
+const PICK_HOME_COL = 9;
+const SYSTEM_SHEETS = [SCHEDULE_SHEET, DIVWIN_SHEET, TALLY_SHEET, MEMBERS_SHEET];
 
 const DIVISIONS = {
   'AFC East': ['Buffalo Bills', 'Miami Dolphins', 'New England Patriots', 'New York Jets'],
@@ -79,18 +90,43 @@ function onOpen() {
     .createMenu('NFL Picks')
     .addItem('1. Initialize (fetch schedule)', 'showFetchScheduleDialog')
     .addItem('2. Add Member', 'addMemberPrompt')
-    .addItem('3. Recompute Results', 'computeResults')
+    .addItem('3. Recompute Results', 'recomputeResultsMenuAction')
     .addToUi();
 }
 
-/** Simple trigger: enforce one pick per game and auto-recompute results. */
+/**
+ * Simple trigger (fires instantly, runs as whoever is editing): only handles
+ * the Away/Home checkbox toggle on the editor's own tab, which they always
+ * have permission to edit. Writing results to the protected Division
+ * Winners/Tally tabs needs owner authority - see recomputeOnEdit below.
+ */
 function onEdit(e) {
   const sheet = e.range.getSheet();
-  if (sheet.getName() !== SCHEDULE_SHEET) return;
+  if (SYSTEM_SHEETS.indexOf(sheet.getName()) !== -1) return;
   if (e.range.getRow() < FIRST_DATA_ROW) return;
-  if (e.range.getColumn() < MEMBER_START_COL) return;
   enforceSingleSelect(sheet, e.range);
+}
+
+/**
+ * Installable trigger (must be registered once - done automatically during
+ * Initialize/Add Member) that always runs with the authority of whoever
+ * installed it (the spreadsheet owner), so it can write to the protected
+ * Division Winners/Tally tabs no matter which member made the edit.
+ */
+function recomputeOnEdit(e) {
+  const sheet = e.range.getSheet();
+  if (SYSTEM_SHEETS.indexOf(sheet.getName()) !== -1) return;
+  if (e.range.getRow() < FIRST_DATA_ROW) return;
   computeResults();
+}
+
+function ensureRecomputeTrigger() {
+  const exists = ScriptApp.getProjectTriggers().some(function (t) {
+    return t.getHandlerFunction() === 'recomputeOnEdit' && t.getEventType() === ScriptApp.EventType.ON_EDIT;
+  });
+  if (!exists) {
+    ScriptApp.newTrigger('recomputeOnEdit').forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet()).onEdit().create();
+  }
 }
 
 /** A game pick is two checkbox columns (Away/Home); checking one unchecks the other. */
@@ -102,9 +138,8 @@ function enforceSingleSelect(sheet, range) {
     for (let j = 0; j < values[i].length; j++) {
       if (values[i][j] !== true) continue;
       const col = startCol + j;
-      if (col < MEMBER_START_COL) continue;
-      const isAwayCol = (col - MEMBER_START_COL) % 2 === 0;
-      const siblingCol = isAwayCol ? col + 1 : col - 1;
+      if (col !== PICK_AWAY_COL && col !== PICK_HOME_COL) continue;
+      const siblingCol = col === PICK_AWAY_COL ? PICK_HOME_COL : PICK_AWAY_COL;
       const siblingCell = sheet.getRange(startRow + i, siblingCol);
       if (siblingCell.getValue() === true) siblingCell.setValue(false);
     }
@@ -138,9 +173,15 @@ function receiveScheduleFromClient(gamesJson, problemsJson) {
     };
   }
 
-  const weather = computeStadiumAndWeather(games);
-  buildScheduleSheet(games, weather);
-  computeResults();
+  try {
+    const weather = computeStadiumAndWeather(games);
+    buildScheduleSheet(games, weather);
+    ensureRecomputeTrigger();
+    computeResults();
+  } catch (err) {
+    return { message: 'Fetched ' + games.length + ' games, but saving failed: ' + err.message +
+      '\n\n(Only the spreadsheet owner can run Initialize.)' };
+  }
 
   let msg = 'Loaded ' + games.length + ' games for the ' + SEASON + ' season, ' +
     'with stadium type and historical average weather.\n' +
@@ -152,18 +193,18 @@ function receiveScheduleFromClient(gamesJson, problemsJson) {
 }
 
 /**
- * For each game, returns { stadiumType, tempStr, precipStr }. Weather is the
- * historical average (temp + precipitation) for that stadium's location on
- * that calendar date, pulled once per unique location and reused across all
- * of that team's home games. Dome games skip weather entirely.
+ * For each game, returns { stadiumType, tempStr, snowStr }. Weather is the
+ * historical average temperature and snow probability for that stadium's
+ * location on that calendar date, pulled once per unique location and reused
+ * across all of that team's home games. Dome games skip weather entirely.
  */
 function computeStadiumAndWeather(games) {
   const seriesCache = {};
   return games.map(function (g) {
     const info = STADIUMS[g.homeName];
-    if (!info) return { stadiumType: 'Unknown', tempStr: 'N/A', precipStr: 'N/A' };
+    if (!info) return { stadiumType: 'Unknown', tempStr: 'N/A', snowStr: 'N/A' };
     if (info.type === 'Dome') {
-      return { stadiumType: info.type, tempStr: 'N/A (Dome)', precipStr: 'N/A (Dome)' };
+      return { stadiumType: info.type, tempStr: 'N/A (Dome)', snowStr: 'N/A (Dome)' };
     }
     const key = info.lat + ',' + info.lon;
     if (!seriesCache[key]) {
@@ -174,20 +215,20 @@ function computeStadiumAndWeather(games) {
     return {
       stadiumType: info.type,
       tempStr: avg ? (Math.round(avg.avgTemp * 10) / 10) + '°F' : 'N/A',
-      precipStr: avg ? (Math.round(avg.avgPrecip * 100) / 100) + ' in' : 'N/A',
+      snowStr: avg && avg.snowProbability !== null ? Math.round(avg.snowProbability) + '% snow' : 'N/A',
     };
   });
 }
 
-/** Daily temp/precip history for a location over the last WEATHER_HISTORY_YEARS full years. */
+/** Daily temp/snowfall history for a location over the last WEATHER_HISTORY_YEARS full years. */
 function fetchWeatherSeries(lat, lon) {
   const endYear = new Date().getFullYear() - 1;
   const startYear = endYear - WEATHER_HISTORY_YEARS + 1;
   const url = 'https://archive-api.open-meteo.com/v1/archive' +
     '?latitude=' + lat + '&longitude=' + lon +
     '&start_date=' + startYear + '-01-01&end_date=' + endYear + '-12-31' +
-    '&daily=temperature_2m_mean,precipitation_sum' +
-    '&temperature_unit=fahrenheit&precipitation_unit=inch&timezone=UTC';
+    '&daily=temperature_2m_mean,snowfall_sum' +
+    '&temperature_unit=fahrenheit&timezone=UTC';
   const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
   if (resp.getResponseCode() !== 200) return [];
   const data = JSON.parse(resp.getContentText());
@@ -197,7 +238,7 @@ function fetchWeatherSeries(lat, lon) {
     return {
       date: new Date(dateStr),
       temp: daily.temperature_2m_mean[i],
-      precip: daily.precipitation_sum[i],
+      snow: daily.snowfall_sum[i],
     };
   });
 }
@@ -213,51 +254,56 @@ function doyDistance(a, b) {
   return Math.min(d, 366 - d);
 }
 
-/** Averages temp/precip across the same +/-3 day window on the calendar, over all history years. */
+/**
+ * Averages temp, and computes snow probability (% of days with any measurable
+ * snowfall), across the same +/-3 day window on the calendar, over all
+ * history years.
+ */
 function averageForDate(series, gameDate) {
   const targetDoy = dayOfYear(gameDate);
   const temps = [];
-  const precips = [];
+  let snowDaysWithData = 0;
+  let snowDaysWithSnow = 0;
   series.forEach(function (pt) {
     if (doyDistance(dayOfYear(pt.date), targetDoy) > 3) return;
     if (typeof pt.temp === 'number') temps.push(pt.temp);
-    if (typeof pt.precip === 'number') precips.push(pt.precip);
+    if (typeof pt.snow === 'number') {
+      snowDaysWithData++;
+      if (pt.snow > 0) snowDaysWithSnow++;
+    }
   });
   if (!temps.length) return null;
   const sum = function (arr) { return arr.reduce(function (a, b) { return a + b; }, 0); };
   return {
     avgTemp: sum(temps) / temps.length,
-    avgPrecip: precips.length ? sum(precips) / precips.length : 0,
+    snowProbability: snowDaysWithData ? (100 * snowDaysWithSnow / snowDaysWithData) : null,
   };
 }
 
+/** Builds the read-only master Schedule tab (no picks - members copy from this). */
 function buildScheduleSheet(games, weather) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(SCHEDULE_SHEET);
   if (sheet) {
-    try { sheet.getDataRange().breakApart(); } catch (err) { /* nothing to unmerge */ }
     sheet.clear();
     sheet.clearFormats();
   } else {
     sheet = ss.insertSheet(SCHEDULE_SHEET);
   }
 
-  const staticHeaders = ['Week', 'Date', 'Away', 'Home', 'Stadium Type', 'Avg Temp', 'Avg Precip'];
-  sheet.getRange(1, 1, 1, staticHeaders.length).setValues([staticHeaders]).setFontWeight('bold');
-  for (let c = 1; c <= staticHeaders.length; c++) {
-    sheet.getRange(1, c, 2, 1).merge().setVerticalAlignment('middle');
-  }
-
+  sheet.getRange(1, 1, 1, STATIC_HEADERS.length).setValues([STATIC_HEADERS]).setFontWeight('bold');
   const rows = games.map(function (g, i) {
     const w = weather[i];
-    return [g.week, formatGameDate(g.date), g.awayName, g.homeName, w.stadiumType, w.tempStr, w.precipStr];
+    return [g.week, formatGameDate(g.date), g.awayName, g.homeName, w.stadiumType, w.tempStr, w.snowStr];
   });
   if (rows.length) {
-    sheet.getRange(FIRST_DATA_ROW, 1, rows.length, staticHeaders.length).setValues(rows);
+    sheet.getRange(FIRST_DATA_ROW, 1, rows.length, STATIC_HEADERS.length).setValues(rows);
   }
-  sheet.setFrozenRows(2);
-  sheet.setFrozenColumns(staticHeaders.length);
-  sheet.autoResizeColumns(1, staticHeaders.length);
+  sheet.setFrozenRows(1);
+  sheet.setFrozenColumns(4);
+  sheet.autoResizeColumns(1, STATIC_HEADERS.length);
+  protectReadOnlySheet(sheet);
+  return sheet;
 }
 
 function formatGameDate(iso) {
@@ -266,35 +312,89 @@ function formatGameDate(iso) {
 
 function addMemberPrompt() {
   const ui = SpreadsheetApp.getUi();
-  const resp = ui.prompt('Add League Member', 'Enter their name:', ui.ButtonSet.OK_CANCEL);
-  if (resp.getSelectedButton() !== ui.Button.OK) return;
-  const name = resp.getResponseText().trim();
+  const nameResp = ui.prompt('Add League Member', 'Enter their name (this becomes their tab name):', ui.ButtonSet.OK_CANCEL);
+  if (nameResp.getSelectedButton() !== ui.Button.OK) return;
+  const name = nameResp.getResponseText().trim();
   if (!name) return;
-  addMember(name);
-  computeResults();
+
+  const emailResp = ui.prompt('Add League Member', 'Enter their Google account email (needed to lock their tab to just them):', ui.ButtonSet.OK_CANCEL);
+  if (emailResp.getSelectedButton() !== ui.Button.OK) return;
+  const email = emailResp.getResponseText().trim();
+  if (!email) return;
+
+  const result = addMember(name, email);
+  ui.alert(result.message);
 }
 
-/** Adds a member as a pair of checkbox columns (Away pick / Home pick) instead of a dropdown. */
-function addMember(name) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SCHEDULE_SHEET);
-  if (!sheet) {
-    SpreadsheetApp.getUi().alert('Run "Initialize" first.');
-    return;
+/** Creates a member's own picks tab (copied from the master schedule) and locks it to just them. */
+function addMember(name, email) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const master = ss.getSheetByName(SCHEDULE_SHEET);
+  if (!master) return { message: 'Run "Initialize" first.' };
+  if (ss.getSheetByName(name)) {
+    return { message: 'A tab named "' + name + '" already exists - pick a different name, or delete/rename the existing tab first.' };
   }
-  const numGames = sheet.getLastRow() - (FIRST_DATA_ROW - 1);
-  const awayCol = sheet.getLastColumn() + 1;
-  const homeCol = awayCol + 1;
 
-  sheet.getRange(1, awayCol, 1, 2).merge().setValue(name)
-    .setFontWeight('bold').setHorizontalAlignment('center');
-  sheet.getRange(2, awayCol).setValue('Away').setFontStyle('italic');
-  sheet.getRange(2, homeCol).setValue('Home').setFontStyle('italic');
+  const numGames = master.getLastRow() - (FIRST_DATA_ROW - 1);
+  if (numGames <= 0) return { message: 'Run "Initialize" first - no games loaded yet.' };
 
-  if (numGames > 0) {
-    sheet.getRange(FIRST_DATA_ROW, awayCol, numGames, 1).insertCheckboxes();
-    sheet.getRange(FIRST_DATA_ROW, homeCol, numGames, 1).insertCheckboxes();
+  try {
+    const gameData = master.getRange(FIRST_DATA_ROW, 1, numGames, STATIC_HEADERS.length).getValues();
+    const sheet = ss.insertSheet(name);
+    const headers = STATIC_HEADERS.concat(['Pick Away', 'Pick Home']);
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+    sheet.getRange(FIRST_DATA_ROW, 1, numGames, STATIC_HEADERS.length).setValues(gameData);
+    sheet.getRange(FIRST_DATA_ROW, PICK_AWAY_COL, numGames, 1).insertCheckboxes();
+    sheet.getRange(FIRST_DATA_ROW, PICK_HOME_COL, numGames, 1).insertCheckboxes();
+    sheet.setFrozenRows(1);
+    sheet.setFrozenColumns(4);
+    sheet.autoResizeColumns(1, headers.length);
+
+    protectMemberSheet(sheet, email);
+    registerMember(name, email, sheet.getName());
+    ensureRecomputeTrigger();
+  } catch (err) {
+    return { message: 'Could not add member: ' + err.message + '\n\n(Only the spreadsheet owner can add members.)' };
   }
-  sheet.autoResizeColumns(awayCol, 2);
+
+  return { message: 'Added ' + name + '. Share the spreadsheet with ' + email + ' (Editor access) so they can fill in their tab.' };
+}
+
+/** Restricts editing of a sheet to just the given email (the owner always retains edit access). */
+function protectMemberSheet(sheet, email) {
+  const protection = sheet.protect().setDescription('Picks for ' + sheet.getName() + ' - edit-locked to that member');
+  protection.removeEditors(protection.getEditors());
+  if (protection.canDomainEdit()) protection.setDomainEdit(false);
+  protection.addEditor(email);
+}
+
+/** Locks a computed/reference sheet so only the spreadsheet owner can edit it. Idempotent. */
+function protectReadOnlySheet(sheet) {
+  if (sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).length > 0) return;
+  const protection = sheet.protect().setDescription('Read-only - computed/reference data');
+  protection.removeEditors(protection.getEditors());
+  if (protection.canDomainEdit()) protection.setDomainEdit(false);
+}
+
+/** Members registry: Name | Email | Tab. Kept hidden and owner-only editable. */
+function registerMember(name, email, tabName) {
+  const reg = getOrCreateSheet(MEMBERS_SHEET);
+  if (reg.getLastRow() === 0) {
+    reg.getRange(1, 1, 1, 3).setValues([['Name', 'Email', 'Tab']]).setFontWeight('bold');
+  }
+  reg.appendRow([name, email, tabName]);
+  reg.hideSheet();
+  protectReadOnlySheet(reg);
+}
+
+/** Returns [{ name, email, tab }, ...] from the Members registry. */
+function getMembers() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const reg = ss.getSheetByName(MEMBERS_SHEET);
+  if (!reg || reg.getLastRow() < 2) return [];
+  return reg.getRange(2, 1, reg.getLastRow() - 1, 3).getValues()
+    .filter(function (row) { return row[0]; })
+    .map(function (row) { return { name: row[0], email: row[1], tab: row[2] }; });
 }
 
 function getOrCreateSheet(name) {
@@ -304,41 +404,50 @@ function getOrCreateSheet(name) {
   return sh;
 }
 
+function recomputeResultsMenuAction() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    computeResults();
+    ui.alert('Results recomputed.');
+  } catch (err) {
+    ui.alert('Could not recompute (' + err.message + '). Results already update automatically as picks come in, ' +
+      'so you likely don\'t need to run this manually - only the spreadsheet owner can force a recompute.');
+  }
+}
+
 function computeResults() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sched = ss.getSheetByName(SCHEDULE_SHEET);
+  const master = ss.getSheetByName(SCHEDULE_SHEET);
   const divSheet = getOrCreateSheet(DIVWIN_SHEET);
   const tallySheet = getOrCreateSheet(TALLY_SHEET);
   divSheet.clear();
   tallySheet.clear();
 
-  if (!sched) return;
-  const numGames = sched.getLastRow() - (FIRST_DATA_ROW - 1);
-  const numMembers = Math.floor((sched.getLastColumn() - MEMBER_START_COL + 1) / 2);
-  if (numMembers <= 0 || numGames <= 0) {
+  if (!master) return;
+  const numGames = master.getLastRow() - (FIRST_DATA_ROW - 1);
+  const memberRecords = getMembers();
+  if (!memberRecords.length || numGames <= 0) {
     divSheet.getRange(1, 1).setValue('Add members and picks to see results.');
     tallySheet.getRange(1, 1).setValue('Add members and picks to see results.');
+    protectReadOnlySheet(divSheet);
+    protectReadOnlySheet(tallySheet);
     return;
   }
 
-  const members = [];
-  for (let m = 0; m < numMembers; m++) {
-    members.push(sched.getRange(1, MEMBER_START_COL + 2 * m).getValue());
-  }
-
-  // Columns C.. => [away, home, away1?, home1?, away2?, home2?, ...]
-  const data = sched.getRange(FIRST_DATA_ROW, 3, numGames, sched.getLastColumn() - 2).getValues();
-  const pickOffset = MEMBER_START_COL - 3; // index within the row array where member checkboxes start
-
+  const masterAwayHome = master.getRange(FIRST_DATA_ROW, 3, numGames, 2).getValues();
+  const members = memberRecords.map(function (m) { return m.name; });
   const winCounts = members.map(function () { return {}; });
   const pickedCounts = members.map(function () { return 0; });
 
-  data.forEach(function (row) {
-    const away = row[0];
-    const home = row[1];
-    for (let m = 0; m < numMembers; m++) {
-      const awayChecked = row[pickOffset + 2 * m] === true;
-      const homeChecked = row[pickOffset + 2 * m + 1] === true;
+  memberRecords.forEach(function (mem, m) {
+    const sheet = ss.getSheetByName(mem.tab);
+    if (!sheet) return; // tab was renamed/deleted; treat as no picks
+    const picks = sheet.getRange(FIRST_DATA_ROW, PICK_AWAY_COL, numGames, 2).getValues();
+    for (let g = 0; g < numGames; g++) {
+      const away = masterAwayHome[g][0];
+      const home = masterAwayHome[g][1];
+      const awayChecked = picks[g][0] === true;
+      const homeChecked = picks[g][1] === true;
       let pick = null;
       if (awayChecked && !homeChecked) pick = away;
       else if (homeChecked && !awayChecked) pick = home;
@@ -354,6 +463,8 @@ function computeResults() {
 
   writeDivisionWinners(divSheet, members, complete, pickedCounts, numGames, winCounts, divNames);
   writeTally(tallySheet, members, complete, winCounts, divNames);
+  protectReadOnlySheet(divSheet);
+  protectReadOnlySheet(tallySheet);
 }
 
 function writeDivisionWinners(divSheet, members, complete, pickedCounts, numGames, winCounts, divNames) {
