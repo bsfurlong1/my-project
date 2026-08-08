@@ -17,11 +17,19 @@ sheet derives who each person effectively picked as the winner of each of the
     averaged over the last 5 years within a few days of the game date). Dome
     games show "N/A (Dome)" since weather doesn't apply.
 - **Each member gets their own tab**, named after them, copied from the
-  Schedule tab with a pair of checkbox columns added (**Pick Away** /
-  **Pick Home**) — check the box under the team they think wins. Checking
-  one automatically unchecks the other for that game. Each tab is
-  edit-locked (via Sheets' protection feature) to just that member's Google
-  account, so nobody can change anyone else's picks.
+  Schedule tab. Picking is a single click: a small checkbox (✓ column) sits
+  immediately to the left of each team's name, and checking it turns that
+  team's name **green** via conditional formatting — so the pick is made and
+  confirmed right on the matchup, not in a separate part of the sheet.
+  Checking one team's box automatically unchecks the other team's for that
+  game. Each tab is edit-locked (via Sheets' protection feature) to just
+  that member's Google account, so nobody can change anyone else's picks.
+
+  (A checkbox can't display the team's name *inside itself* — Sheets always
+  renders a checkbox cell as just the checkbox, with no visible label — so
+  the checkbox lives in its own narrow column right next to the name rather
+  than being merged into it. This is the closest one-click, clear-feedback
+  version Sheets can actually do.)
 
   **Important limitation:** Google Sheets has no way to hide a tab from
   specific people within one shared file — protection controls who can

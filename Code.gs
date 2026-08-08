@@ -30,11 +30,21 @@ const TALLY_SHEET = 'Tally';
 const MEMBERS_SHEET = 'Members';
 const WEATHER_HISTORY_YEARS = 5;
 
-// Schedule/member tab layout: one header row, then games starting row 2.
-const STATIC_HEADERS = ['Week', 'Date', 'Away', 'Home', 'Stadium Type', 'Avg Temp', 'Snow Chance'];
+// Master Schedule tab layout (read-only, no picking here): one header row,
+// then games starting row 2.
+const MASTER_HEADERS = ['Week', 'Date', 'Away', 'Home', 'Stadium Type', 'Avg Temp', 'Snow Chance'];
 const FIRST_DATA_ROW = 2;
-const PICK_AWAY_COL = 8;
-const PICK_HOME_COL = 9;
+
+// Member tab layout: a checkbox sits immediately next to each team name so
+// picking is a single click right on the matchup, and conditional formatting
+// turns that team's name green when its checkbox is checked.
+const MEMBER_HEADERS = ['Week', 'Date', '✓', 'Away', '✓', 'Home', 'Stadium Type', 'Avg Temp', 'Snow Chance'];
+const COL_PICK_AWAY = 3;
+const COL_AWAY = 4;
+const COL_PICK_HOME = 5;
+const COL_HOME = 6;
+const PICK_GREEN = '#b7e1cd';
+
 const SYSTEM_SHEETS = [SCHEDULE_SHEET, DIVWIN_SHEET, TALLY_SHEET, MEMBERS_SHEET];
 
 const DIVISIONS = {
@@ -138,8 +148,8 @@ function enforceSingleSelect(sheet, range) {
     for (let j = 0; j < values[i].length; j++) {
       if (values[i][j] !== true) continue;
       const col = startCol + j;
-      if (col !== PICK_AWAY_COL && col !== PICK_HOME_COL) continue;
-      const siblingCol = col === PICK_AWAY_COL ? PICK_HOME_COL : PICK_AWAY_COL;
+      if (col !== COL_PICK_AWAY && col !== COL_PICK_HOME) continue;
+      const siblingCol = col === COL_PICK_AWAY ? COL_PICK_HOME : COL_PICK_AWAY;
       const siblingCell = sheet.getRange(startRow + i, siblingCol);
       if (siblingCell.getValue() === true) siblingCell.setValue(false);
     }
@@ -291,17 +301,17 @@ function buildScheduleSheet(games, weather) {
     sheet = ss.insertSheet(SCHEDULE_SHEET);
   }
 
-  sheet.getRange(1, 1, 1, STATIC_HEADERS.length).setValues([STATIC_HEADERS]).setFontWeight('bold');
+  sheet.getRange(1, 1, 1, MASTER_HEADERS.length).setValues([MASTER_HEADERS]).setFontWeight('bold');
   const rows = games.map(function (g, i) {
     const w = weather[i];
     return [g.week, formatGameDate(g.date), g.awayName, g.homeName, w.stadiumType, w.tempStr, w.snowStr];
   });
   if (rows.length) {
-    sheet.getRange(FIRST_DATA_ROW, 1, rows.length, STATIC_HEADERS.length).setValues(rows);
+    sheet.getRange(FIRST_DATA_ROW, 1, rows.length, MASTER_HEADERS.length).setValues(rows);
   }
   sheet.setFrozenRows(1);
   sheet.setFrozenColumns(4);
-  sheet.autoResizeColumns(1, STATIC_HEADERS.length);
+  sheet.autoResizeColumns(1, MASTER_HEADERS.length);
   protectReadOnlySheet(sheet);
   return sheet;
 }
@@ -339,17 +349,27 @@ function addMember(name, email) {
   if (numGames <= 0) return { message: 'Run "Initialize" first - no games loaded yet.' };
 
   try {
-    const gameData = master.getRange(FIRST_DATA_ROW, 1, numGames, STATIC_HEADERS.length).getValues();
-    const sheet = ss.insertSheet(name);
-    const headers = STATIC_HEADERS.concat(['Pick Away', 'Pick Home']);
-    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
-    sheet.getRange(FIRST_DATA_ROW, 1, numGames, STATIC_HEADERS.length).setValues(gameData);
-    sheet.getRange(FIRST_DATA_ROW, PICK_AWAY_COL, numGames, 1).insertCheckboxes();
-    sheet.getRange(FIRST_DATA_ROW, PICK_HOME_COL, numGames, 1).insertCheckboxes();
-    sheet.setFrozenRows(1);
-    sheet.setFrozenColumns(4);
-    sheet.autoResizeColumns(1, headers.length);
+    // Master row = [week, date, away, home, stadium, temp, snow]. Re-map into
+    // the member layout, which interleaves a pick checkbox before each team
+    // name: [week, date, <pickAway>, away, <pickHome>, home, stadium, temp, snow].
+    const masterRows = master.getRange(FIRST_DATA_ROW, 1, numGames, MASTER_HEADERS.length).getValues();
+    const memberRows = masterRows.map(function (r) {
+      return [r[0], r[1], '', r[2], '', r[3], r[4], r[5], r[6]];
+    });
 
+    const sheet = ss.insertSheet(name);
+    sheet.getRange(1, 1, 1, MEMBER_HEADERS.length).setValues([MEMBER_HEADERS]).setFontWeight('bold');
+    sheet.getRange(FIRST_DATA_ROW, 1, numGames, MEMBER_HEADERS.length).setValues(memberRows);
+    sheet.getRange(FIRST_DATA_ROW, COL_PICK_AWAY, numGames, 1).insertCheckboxes();
+    sheet.getRange(FIRST_DATA_ROW, COL_PICK_HOME, numGames, 1).insertCheckboxes();
+    sheet.setFrozenRows(1);
+    sheet.setFrozenColumns(COL_HOME);
+    sheet.autoResizeColumns(1, MEMBER_HEADERS.length);
+    // Narrow the checkbox columns after auto-resize so it doesn't widen them back out.
+    sheet.setColumnWidth(COL_PICK_AWAY, 40);
+    sheet.setColumnWidth(COL_PICK_HOME, 40);
+
+    applyPickFormatting(sheet, numGames);
     protectMemberSheet(sheet, email);
     registerMember(name, email, sheet.getName());
     ensureRecomputeTrigger();
@@ -358,6 +378,40 @@ function addMember(name, email) {
   }
 
   return { message: 'Added ' + name + '. Share the spreadsheet with ' + email + ' (Editor access) so they can fill in their tab.' };
+}
+
+/** Turns a team's name green when its pick checkbox (in the same row) is checked. */
+function applyPickFormatting(sheet, numGames) {
+  const awayNameRange = sheet.getRange(FIRST_DATA_ROW, COL_AWAY, numGames, 1);
+  const homeNameRange = sheet.getRange(FIRST_DATA_ROW, COL_HOME, numGames, 1);
+  const awayCol = columnLetter(COL_PICK_AWAY);
+  const homeCol = columnLetter(COL_PICK_HOME);
+
+  const awayRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=$' + awayCol + FIRST_DATA_ROW + '=TRUE')
+    .setBackground(PICK_GREEN)
+    .setBold(true)
+    .setRanges([awayNameRange])
+    .build();
+  const homeRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=$' + homeCol + FIRST_DATA_ROW + '=TRUE')
+    .setBackground(PICK_GREEN)
+    .setBold(true)
+    .setRanges([homeNameRange])
+    .build();
+
+  sheet.setConditionalFormatRules(sheet.getConditionalFormatRules().concat([awayRule, homeRule]));
+}
+
+/** Converts a 1-based column index to its A1 letter (3 -> "C"). */
+function columnLetter(col) {
+  let letter = '';
+  while (col > 0) {
+    const rem = (col - 1) % 26;
+    letter = String.fromCharCode(65 + rem) + letter;
+    col = Math.floor((col - 1) / 26);
+  }
+  return letter;
 }
 
 /** Restricts editing of a sheet to just the given email (the owner always retains edit access). */
@@ -442,12 +496,15 @@ function computeResults() {
   memberRecords.forEach(function (mem, m) {
     const sheet = ss.getSheetByName(mem.tab);
     if (!sheet) return; // tab was renamed/deleted; treat as no picks
-    const picks = sheet.getRange(FIRST_DATA_ROW, PICK_AWAY_COL, numGames, 2).getValues();
+    // COL_PICK_AWAY and COL_PICK_HOME aren't adjacent (the team name column
+    // sits between them), so they're read separately rather than as one range.
+    const awayPicks = sheet.getRange(FIRST_DATA_ROW, COL_PICK_AWAY, numGames, 1).getValues();
+    const homePicks = sheet.getRange(FIRST_DATA_ROW, COL_PICK_HOME, numGames, 1).getValues();
     for (let g = 0; g < numGames; g++) {
       const away = masterAwayHome[g][0];
       const home = masterAwayHome[g][1];
-      const awayChecked = picks[g][0] === true;
-      const homeChecked = picks[g][1] === true;
+      const awayChecked = awayPicks[g][0] === true;
+      const homeChecked = homePicks[g][0] === true;
       let pick = null;
       if (awayChecked && !homeChecked) pick = away;
       else if (homeChecked && !awayChecked) pick = home;
