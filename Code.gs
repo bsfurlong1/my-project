@@ -37,13 +37,18 @@ const FIRST_DATA_ROW = 2;
 
 // Member tab layout: a checkbox sits immediately next to each team name so
 // picking is a single click right on the matchup, and conditional formatting
-// turns that team's name green when its checkbox is checked.
+// turns that team's name green when its checkbox is checked. Row 1 is a
+// live status banner ("all picked" / "N left"), row 2 is the header, and
+// game rows start at MEMBER_FIRST_DATA_ROW.
 const MEMBER_HEADERS = ['Week', 'Date', '✓', 'Away', '✓', 'Home', 'Stadium Type', 'Avg Temp', 'Snow Chance'];
+const MEMBER_HEADER_ROW = FIRST_DATA_ROW; // row 2
+const MEMBER_FIRST_DATA_ROW = FIRST_DATA_ROW + 1; // row 3
 const COL_PICK_AWAY = 3;
 const COL_AWAY = 4;
 const COL_PICK_HOME = 5;
 const COL_HOME = 6;
 const PICK_GREEN = '#b7e1cd';
+const INCOMPLETE_RED = '#f4cccc';
 
 const SYSTEM_SHEETS = [SCHEDULE_SHEET, DIVWIN_SHEET, TALLY_SHEET, MEMBERS_SHEET];
 
@@ -113,7 +118,7 @@ function onOpen() {
 function onEdit(e) {
   const sheet = e.range.getSheet();
   if (SYSTEM_SHEETS.indexOf(sheet.getName()) !== -1) return;
-  if (e.range.getRow() < FIRST_DATA_ROW) return;
+  if (e.range.getRow() < MEMBER_FIRST_DATA_ROW) return;
   enforceSingleSelect(sheet, e.range);
 }
 
@@ -126,7 +131,7 @@ function onEdit(e) {
 function recomputeOnEdit(e) {
   const sheet = e.range.getSheet();
   if (SYSTEM_SHEETS.indexOf(sheet.getName()) !== -1) return;
-  if (e.range.getRow() < FIRST_DATA_ROW) return;
+  if (e.range.getRow() < MEMBER_FIRST_DATA_ROW) return;
   computeResults();
 }
 
@@ -358,17 +363,18 @@ function addMember(name, email) {
     });
 
     const sheet = ss.insertSheet(name);
-    sheet.getRange(1, 1, 1, MEMBER_HEADERS.length).setValues([MEMBER_HEADERS]).setFontWeight('bold');
-    sheet.getRange(FIRST_DATA_ROW, 1, numGames, MEMBER_HEADERS.length).setValues(memberRows);
-    sheet.getRange(FIRST_DATA_ROW, COL_PICK_AWAY, numGames, 1).insertCheckboxes();
-    sheet.getRange(FIRST_DATA_ROW, COL_PICK_HOME, numGames, 1).insertCheckboxes();
-    sheet.setFrozenRows(1);
+    sheet.getRange(MEMBER_HEADER_ROW, 1, 1, MEMBER_HEADERS.length).setValues([MEMBER_HEADERS]).setFontWeight('bold');
+    sheet.getRange(MEMBER_FIRST_DATA_ROW, 1, numGames, MEMBER_HEADERS.length).setValues(memberRows);
+    sheet.getRange(MEMBER_FIRST_DATA_ROW, COL_PICK_AWAY, numGames, 1).insertCheckboxes();
+    sheet.getRange(MEMBER_FIRST_DATA_ROW, COL_PICK_HOME, numGames, 1).insertCheckboxes();
+    sheet.setFrozenRows(MEMBER_FIRST_DATA_ROW - 1);
     sheet.setFrozenColumns(COL_HOME);
     sheet.autoResizeColumns(1, MEMBER_HEADERS.length);
     // Narrow the checkbox columns after auto-resize so it doesn't widen them back out.
     sheet.setColumnWidth(COL_PICK_AWAY, 40);
     sheet.setColumnWidth(COL_PICK_HOME, 40);
 
+    applyStatusBanner(sheet, numGames);
     applyPickFormatting(sheet, numGames);
     protectMemberSheet(sheet, email);
     registerMember(name, email, sheet.getName());
@@ -380,21 +386,57 @@ function addMember(name, email) {
   return { message: 'Added ' + name + '. Share the spreadsheet with ' + email + ' (Editor access) so they can fill in their tab.' };
 }
 
+/**
+ * Writes a live status banner in row 1 ("All N games picked!" / "N left")
+ * driven by a plain Sheets formula, so it updates instantly on every
+ * checkbox click with no script/trigger round-trip. Color follows via
+ * conditional formatting on the banner text itself.
+ */
+function applyStatusBanner(sheet, numGames) {
+  const lastDataRow = MEMBER_FIRST_DATA_ROW + numGames - 1;
+  const awayCol = columnLetter(COL_PICK_AWAY);
+  const homeCol = columnLetter(COL_PICK_HOME);
+  const awayRange = '$' + awayCol + '$' + MEMBER_FIRST_DATA_ROW + ':$' + awayCol + '$' + lastDataRow;
+  const homeRange = '$' + homeCol + '$' + MEMBER_FIRST_DATA_ROW + ':$' + homeCol + '$' + lastDataRow;
+  const missingCountExpr = 'COUNTIFS(' + awayRange + ',FALSE,' + homeRange + ',FALSE)';
+
+  const formula = '=IF(' + missingCountExpr + '=0,' +
+    '"✅ All ' + numGames + ' games picked!",' +
+    '"⏳ " & ' + missingCountExpr + ' & " of ' + numGames + ' games still need a pick")';
+
+  const bannerRange = sheet.getRange(1, 1, 1, MEMBER_HEADERS.length);
+  bannerRange.merge().setFormula(formula).setHorizontalAlignment('center')
+    .setVerticalAlignment('middle').setFontWeight('bold').setFontSize(12);
+
+  const completeRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenTextContains('✅')
+    .setBackground(PICK_GREEN)
+    .setRanges([bannerRange])
+    .build();
+  const incompleteRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenTextContains('⏳')
+    .setBackground(INCOMPLETE_RED)
+    .setRanges([bannerRange])
+    .build();
+
+  sheet.setConditionalFormatRules(sheet.getConditionalFormatRules().concat([completeRule, incompleteRule]));
+}
+
 /** Turns a team's name green when its pick checkbox (in the same row) is checked. */
 function applyPickFormatting(sheet, numGames) {
-  const awayNameRange = sheet.getRange(FIRST_DATA_ROW, COL_AWAY, numGames, 1);
-  const homeNameRange = sheet.getRange(FIRST_DATA_ROW, COL_HOME, numGames, 1);
+  const awayNameRange = sheet.getRange(MEMBER_FIRST_DATA_ROW, COL_AWAY, numGames, 1);
+  const homeNameRange = sheet.getRange(MEMBER_FIRST_DATA_ROW, COL_HOME, numGames, 1);
   const awayCol = columnLetter(COL_PICK_AWAY);
   const homeCol = columnLetter(COL_PICK_HOME);
 
   const awayRule = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=$' + awayCol + FIRST_DATA_ROW + '=TRUE')
+    .whenFormulaSatisfied('=$' + awayCol + MEMBER_FIRST_DATA_ROW + '=TRUE')
     .setBackground(PICK_GREEN)
     .setBold(true)
     .setRanges([awayNameRange])
     .build();
   const homeRule = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=$' + homeCol + FIRST_DATA_ROW + '=TRUE')
+    .whenFormulaSatisfied('=$' + homeCol + MEMBER_FIRST_DATA_ROW + '=TRUE')
     .setBackground(PICK_GREEN)
     .setBold(true)
     .setRanges([homeNameRange])
@@ -498,8 +540,8 @@ function computeResults() {
     if (!sheet) return; // tab was renamed/deleted; treat as no picks
     // COL_PICK_AWAY and COL_PICK_HOME aren't adjacent (the team name column
     // sits between them), so they're read separately rather than as one range.
-    const awayPicks = sheet.getRange(FIRST_DATA_ROW, COL_PICK_AWAY, numGames, 1).getValues();
-    const homePicks = sheet.getRange(FIRST_DATA_ROW, COL_PICK_HOME, numGames, 1).getValues();
+    const awayPicks = sheet.getRange(MEMBER_FIRST_DATA_ROW, COL_PICK_AWAY, numGames, 1).getValues();
+    const homePicks = sheet.getRange(MEMBER_FIRST_DATA_ROW, COL_PICK_HOME, numGames, 1).getValues();
     for (let g = 0; g < numGames; g++) {
       const away = masterAwayHome[g][0];
       const home = masterAwayHome[g][1];

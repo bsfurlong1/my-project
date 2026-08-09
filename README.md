@@ -17,7 +17,13 @@ sheet derives who each person effectively picked as the winner of each of the
     averaged over the last 5 years within a few days of the game date). Dome
     games show "N/A (Dome)" since weather doesn't apply.
 - **Each member gets their own tab**, named after them, copied from the
-  Schedule tab. Picking is a single click: a small checkbox (✓ column) sits
+  Schedule tab, with a live status banner at the very top: a green
+  "✅ All N games picked!" once every game has a pick, or a red
+  "⏳ N of M games still need a pick" otherwise. It's a plain Sheets formula
+  (`COUNTIFS`), so it updates instantly on every checkbox click with no
+  script involved.
+
+  Picking is a single click: a small checkbox (✓ column) sits
   immediately to the left of each team's name, and checking it turns that
   team's name **green** via conditional formatting — so the pick is made and
   confirmed right on the matchup, not in a separate part of the sheet.
@@ -83,3 +89,10 @@ re-run anything).
 
 To change the season, edit the `SEASON` constant at the top of `Code.gs`
 before running Initialize.
+
+**Upgrading `Code.gs` on a spreadsheet that already has member tabs:** new
+tab features (like the status banner) only apply to tabs created *after*
+the update — existing member tabs won't retroactively get them. To pick up
+a change, delete that member's tab and run **Add Member** for them again
+(their old picks are lost, so only do this before picks are underway, or
+ask the member to re-enter theirs).
