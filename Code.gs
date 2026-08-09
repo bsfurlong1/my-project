@@ -404,7 +404,10 @@ function applyStatusBanner(sheet, numGames) {
     '"✅ All ' + numGames + ' games picked!",' +
     '"⏳ " & ' + missingCountExpr + ' & " of ' + numGames + ' games still need a pick")';
 
-  const bannerRange = sheet.getRange(1, 1, 1, MEMBER_HEADERS.length);
+  // Merging can't cross the frozen/non-frozen column boundary (set in
+  // addMember before this runs), so the banner spans only the frozen
+  // columns (1..COL_HOME) - which stay visible regardless of scroll anyway.
+  const bannerRange = sheet.getRange(1, 1, 1, COL_HOME);
   bannerRange.merge().setFormula(formula).setHorizontalAlignment('center')
     .setVerticalAlignment('middle').setFontWeight('bold').setFontSize(12);
 
