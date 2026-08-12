@@ -50,18 +50,26 @@ sheet derives who each person effectively picked as the winner of each of the
   marked "(incomplete)".
 
   Ties (two or more teams picked to the same win total) are broken using
-  the first two of the NFL/ESPN's actual posted tiebreakers, applied to that
-  member's picks: **head-to-head** (record in games between just the tied
-  teams), then **division record** (record across all games within the
-  division) if still tied. Both are fully computable from picks alone,
-  since divisions always play a full home-and-away round robin. A resolved
-  pick shows how it was decided, e.g. "Buffalo Bills (12 wins, won
-  tiebreaker on head-to-head)". The remaining official tiebreakers (common
-  games, conference record, strength of victory/schedule, points-based
-  tiebreakers, coin toss) are **not** applied — some of those need real game
-  scores, which this tool never tracks. A tie that survives both steps is
-  shown explicitly, e.g. "TIE: Buffalo Bills / Miami Dolphins (12 wins
-  each)", and the Tally tab credits a vote to every team still tied.
+  five of the NFL/ESPN's actual posted tiebreakers, applied in order to that
+  member's picks:
+  1. **Head-to-head** — record in games between just the tied teams.
+  2. **Division record** — record across all games within the division.
+  3. **Conference record** — record across all games within the conference
+     (AFC or NFC).
+  4. **Strength of victory** — aggregate record of every team this team has
+     beaten.
+  5. **Strength of schedule** — aggregate record of every team this team has
+     played.
+
+  All five are fully computable from picks alone. A resolved pick shows how
+  it was decided, e.g. "Buffalo Bills (12 wins, won tiebreaker on
+  conference record)". **Not applied:** common games (skipped — rarely
+  decisive once conference record is in play), the points-based tiebreakers,
+  and the final coin toss — those need real game scores, which this tool
+  never tracks. A tie that survives all five steps (rare — it means two
+  teams are genuinely identical by every computable measure) is shown
+  explicitly, e.g. "TIE: Buffalo Bills / Miami Dolphins (12 wins each)", and
+  the Tally tab credits a vote to every team still tied.
 - **Tally** tab (read-only): once a member's picks are complete, they count
   toward the vote total for their picked team in each division. Shows, for
   each of the 8 divisions, which team got the most votes.

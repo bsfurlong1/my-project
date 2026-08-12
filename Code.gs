@@ -575,42 +575,68 @@ function computeResults() {
   protectReadOnlySheet(tallySheet);
 }
 
+const ALL_TEAMS = Object.keys(DIVISIONS).reduce(function (acc, div) { return acc.concat(DIVISIONS[div]); }, []);
+
 /**
  * For each division and member, picks the division winner from that
- * member's win counts, resolving ties with the first two official NFL
- * tiebreakers (head-to-head, then division record) - both fully computable
- * from picks alone since NFL divisions always play a full home-and-away
- * round robin. Remaining ties (rare) are left as an explicit tie.
+ * member's win counts, resolving ties with five of the NFL/ESPN's official
+ * tiebreakers, in order: head-to-head, division record, conference record,
+ * strength of victory, strength of schedule - all fully computable from
+ * picks alone. Skipped: common games (rarely decisive once conference
+ * record is in play), the points-based tiebreakers and coin toss (need
+ * real scores this tool never tracks). Remaining ties (rare) are left as
+ * an explicit tie.
  */
 function resolveAllDivisionWinners(members, complete, winCounts, picksByGame, masterAwayHome, divNames) {
+  const statsByMember = members.map(function (mem, m) {
+    return complete[m] ? buildSeasonStats(picksByGame[m], masterAwayHome) : null;
+  });
+
   return divNames.map(function (div) {
     const teams = DIVISIONS[div];
     return members.map(function (mem, m) {
       if (!complete[m]) return null;
-      return resolveDivisionWinner(teams, winCounts[m], picksByGame[m], masterAwayHome);
+      return resolveDivisionWinner(teams, winCounts[m], picksByGame[m], masterAwayHome, statsByMember[m]);
     });
   });
 }
 
-/** Returns { winners: [team,...], wins: n, resolvedBy: 'head-to-head' | 'division record' | null }. */
-function resolveDivisionWinner(divisionTeams, winCountsForMember, picks, masterAwayHome) {
+/** Returns { winners: [team,...], wins: n, resolvedBy: <tiebreaker name> | null }. */
+function resolveDivisionWinner(divisionTeams, winCountsForMember, picks, masterAwayHome, stats) {
   const counts = divisionTeams.map(function (t) { return winCountsForMember[t] || 0; });
   const max = Math.max.apply(null, counts);
   let tied = divisionTeams.filter(function (t, i) { return counts[i] === max; });
   if (tied.length === 1) return { winners: tied, wins: max, resolvedBy: null };
 
-  const afterH2H = narrowByRecordInGames(tied, picks, masterAwayHome, function (away, home) {
-    return tied.indexOf(away) !== -1 && tied.indexOf(home) !== -1;
-  });
-  if (afterH2H.length === 1) return { winners: afterH2H, wins: max, resolvedBy: 'head-to-head' };
-  if (afterH2H.length < tied.length) tied = afterH2H;
+  const steps = [
+    { name: 'head-to-head', narrow: function (t) {
+      return narrowByRecordInGames(t, picks, masterAwayHome, function (away, home) {
+        return t.indexOf(away) !== -1 && t.indexOf(home) !== -1;
+      });
+    } },
+    { name: 'division record', narrow: function (t) {
+      return narrowByRecordInGames(t, picks, masterAwayHome, function (away, home) {
+        return divisionTeams.indexOf(away) !== -1 && divisionTeams.indexOf(home) !== -1;
+      });
+    } },
+    { name: 'conference record', narrow: function (t) {
+      return narrowByMetric(t, function (team) { return conferenceRecordPct(stats, team); });
+    } },
+    { name: 'strength of victory', narrow: function (t) {
+      return narrowByMetric(t, function (team) { return strengthOfVictory(stats, team); });
+    } },
+    { name: 'strength of schedule', narrow: function (t) {
+      return narrowByMetric(t, function (team) { return strengthOfSchedule(stats, team); });
+    } },
+  ];
 
-  const afterDivRecord = narrowByRecordInGames(tied, picks, masterAwayHome, function (away, home) {
-    return divisionTeams.indexOf(away) !== -1 && divisionTeams.indexOf(home) !== -1;
-  });
-  if (afterDivRecord.length === 1) return { winners: afterDivRecord, wins: max, resolvedBy: 'division record' };
+  for (let i = 0; i < steps.length; i++) {
+    const next = steps[i].narrow(tied);
+    if (next.length === 1) return { winners: next, wins: max, resolvedBy: steps[i].name };
+    if (next.length < tied.length) tied = next;
+  }
 
-  return { winners: afterDivRecord, wins: max, resolvedBy: null };
+  return { winners: tied, wins: max, resolvedBy: null };
 }
 
 /**
@@ -637,6 +663,76 @@ function narrowByRecordInGames(tiedTeams, picks, masterAwayHome, includeGame) {
   const pct = tiedTeams.map(function (t) { return games[t] ? wins[t] / games[t] : 0; });
   const maxPct = Math.max.apply(null, pct);
   return tiedTeams.filter(function (t, i) { return pct[i] === maxPct; });
+}
+
+/** Narrows `tiedTeams` to whichever have the highest value of metricFn(team). */
+function narrowByMetric(tiedTeams, metricFn) {
+  const values = tiedTeams.map(metricFn);
+  const maxVal = Math.max.apply(null, values);
+  return tiedTeams.filter(function (t, i) { return values[i] === maxVal; });
+}
+
+/**
+ * For one member, builds every team's full-season game log (all 32 teams,
+ * from the whole schedule, not just one division): who they played, whether
+ * they won (per this member's picks), and whether it was a conference game.
+ * Powers conference record, strength of victory, and strength of schedule.
+ */
+function buildSeasonStats(picks, masterAwayHome) {
+  const gameLog = {};
+  ALL_TEAMS.forEach(function (t) { gameLog[t] = []; });
+
+  masterAwayHome.forEach(function (pair, g) {
+    const away = pair[0];
+    const home = pair[1];
+    const pick = picks[g];
+    if (!pick || !gameLog[away] || !gameLog[home]) return;
+    const sameConference = teamConference(away) === teamConference(home);
+    gameLog[away].push({ opponent: home, won: pick === away, conferenceGame: sameConference });
+    gameLog[home].push({ opponent: away, won: pick === home, conferenceGame: sameConference });
+  });
+
+  const wins = {};
+  const games = {};
+  ALL_TEAMS.forEach(function (t) {
+    wins[t] = gameLog[t].filter(function (g) { return g.won; }).length;
+    games[t] = gameLog[t].length;
+  });
+
+  return { gameLog: gameLog, wins: wins, games: games };
+}
+
+/** 'AFC' or 'NFC' for a team, derived from its division name. */
+function teamConference(team) {
+  for (const div in DIVISIONS) {
+    if (DIVISIONS[div].indexOf(team) !== -1) return div.split(' ')[0];
+  }
+  return null;
+}
+
+function conferenceRecordPct(stats, team) {
+  const confGames = stats.gameLog[team].filter(function (g) { return g.conferenceGame; });
+  if (!confGames.length) return 0;
+  const w = confGames.filter(function (g) { return g.won; }).length;
+  return w / confGames.length;
+}
+
+/** Aggregate win pct of every opponent this team has defeated (with multiplicity). */
+function strengthOfVictory(stats, team) {
+  const defeated = stats.gameLog[team].filter(function (g) { return g.won; });
+  return opponentAggregatePct(stats, defeated);
+}
+
+/** Aggregate win pct of every opponent this team has played (with multiplicity). */
+function strengthOfSchedule(stats, team) {
+  return opponentAggregatePct(stats, stats.gameLog[team]);
+}
+
+function opponentAggregatePct(stats, gameEntries) {
+  if (!gameEntries.length) return 0;
+  const sumWins = gameEntries.reduce(function (s, g) { return s + stats.wins[g.opponent]; }, 0);
+  const sumGames = gameEntries.reduce(function (s, g) { return s + stats.games[g.opponent]; }, 0);
+  return sumGames ? sumWins / sumGames : 0;
 }
 
 function writeDivisionWinners(divSheet, members, complete, pickedCounts, numGames, results, divNames) {
