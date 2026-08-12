@@ -537,6 +537,10 @@ function computeResults() {
   const members = memberRecords.map(function (m) { return m.name; });
   const winCounts = members.map(function () { return {}; });
   const pickedCounts = members.map(function () { return 0; });
+  // picksByGame[m][g] = the team that member m picked to win game g (or null
+  // if unpicked) - needed to resolve division-winner ties (head-to-head /
+  // division record depend on individual game outcomes, not just totals).
+  const picksByGame = members.map(function () { return new Array(numGames).fill(null); });
 
   memberRecords.forEach(function (mem, m) {
     const sheet = ss.getSheetByName(mem.tab);
@@ -556,37 +560,103 @@ function computeResults() {
       if (pick) {
         pickedCounts[m]++;
         winCounts[m][pick] = (winCounts[m][pick] || 0) + 1;
+        picksByGame[m][g] = pick;
       }
     }
   });
 
   const complete = pickedCounts.map(function (c) { return c === numGames; });
   const divNames = Object.keys(DIVISIONS);
+  const results = resolveAllDivisionWinners(members, complete, winCounts, picksByGame, masterAwayHome, divNames);
 
-  writeDivisionWinners(divSheet, members, complete, pickedCounts, numGames, winCounts, divNames);
-  writeTally(tallySheet, members, complete, winCounts, divNames);
+  writeDivisionWinners(divSheet, members, complete, pickedCounts, numGames, results, divNames);
+  writeTally(tallySheet, members, complete, results, divNames);
   protectReadOnlySheet(divSheet);
   protectReadOnlySheet(tallySheet);
 }
 
-function writeDivisionWinners(divSheet, members, complete, pickedCounts, numGames, winCounts, divNames) {
+/**
+ * For each division and member, picks the division winner from that
+ * member's win counts, resolving ties with the first two official NFL
+ * tiebreakers (head-to-head, then division record) - both fully computable
+ * from picks alone since NFL divisions always play a full home-and-away
+ * round robin. Remaining ties (rare) are left as an explicit tie.
+ */
+function resolveAllDivisionWinners(members, complete, winCounts, picksByGame, masterAwayHome, divNames) {
+  return divNames.map(function (div) {
+    const teams = DIVISIONS[div];
+    return members.map(function (mem, m) {
+      if (!complete[m]) return null;
+      return resolveDivisionWinner(teams, winCounts[m], picksByGame[m], masterAwayHome);
+    });
+  });
+}
+
+/** Returns { winners: [team,...], wins: n, resolvedBy: 'head-to-head' | 'division record' | null }. */
+function resolveDivisionWinner(divisionTeams, winCountsForMember, picks, masterAwayHome) {
+  const counts = divisionTeams.map(function (t) { return winCountsForMember[t] || 0; });
+  const max = Math.max.apply(null, counts);
+  let tied = divisionTeams.filter(function (t, i) { return counts[i] === max; });
+  if (tied.length === 1) return { winners: tied, wins: max, resolvedBy: null };
+
+  const afterH2H = narrowByRecordInGames(tied, picks, masterAwayHome, function (away, home) {
+    return tied.indexOf(away) !== -1 && tied.indexOf(home) !== -1;
+  });
+  if (afterH2H.length === 1) return { winners: afterH2H, wins: max, resolvedBy: 'head-to-head' };
+  if (afterH2H.length < tied.length) tied = afterH2H;
+
+  const afterDivRecord = narrowByRecordInGames(tied, picks, masterAwayHome, function (away, home) {
+    return divisionTeams.indexOf(away) !== -1 && divisionTeams.indexOf(home) !== -1;
+  });
+  if (afterDivRecord.length === 1) return { winners: afterDivRecord, wins: max, resolvedBy: 'division record' };
+
+  return { winners: afterDivRecord, wins: max, resolvedBy: null };
+}
+
+/**
+ * Narrows `tiedTeams` to whichever have the best win percentage among games
+ * matching `includeGame(away, home)`. Used for both head-to-head (games
+ * between just the tied teams) and division record (games within the whole
+ * division, credited only to the still-tied teams).
+ */
+function narrowByRecordInGames(tiedTeams, picks, masterAwayHome, includeGame) {
+  const wins = {};
+  const games = {};
+  tiedTeams.forEach(function (t) { wins[t] = 0; games[t] = 0; });
+
+  masterAwayHome.forEach(function (pair, g) {
+    const away = pair[0];
+    const home = pair[1];
+    if (!includeGame(away, home)) return;
+    const pick = picks[g];
+    if (!pick) return;
+    if (tiedTeams.indexOf(away) !== -1) { games[away]++; if (pick === away) wins[away]++; }
+    if (tiedTeams.indexOf(home) !== -1) { games[home]++; if (pick === home) wins[home]++; }
+  });
+
+  const pct = tiedTeams.map(function (t) { return games[t] ? wins[t] / games[t] : 0; });
+  const maxPct = Math.max.apply(null, pct);
+  return tiedTeams.filter(function (t, i) { return pct[i] === maxPct; });
+}
+
+function writeDivisionWinners(divSheet, members, complete, pickedCounts, numGames, results, divNames) {
   const header = ['Division'].concat(members);
   divSheet.getRange(1, 1, 1, header.length).setValues([header]).setFontWeight('bold');
 
-  const rows = divNames.map(function (div) {
-    const teams = DIVISIONS[div];
+  const rows = divNames.map(function (div, d) {
     const row = [div];
     members.forEach(function (mem, m) {
       if (!complete[m]) {
         row.push('(incomplete: ' + pickedCounts[m] + '/' + numGames + ')');
         return;
       }
-      const counts = teams.map(function (t) { return winCounts[m][t] || 0; });
-      const max = Math.max.apply(null, counts);
-      const winners = teams.filter(function (t, i) { return counts[i] === max; });
-      row.push(winners.length > 1
-        ? 'TIE: ' + winners.join(' / ') + ' (' + max + ' wins each)'
-        : winners[0] + ' (' + max + ' wins)');
+      const r = results[d][m];
+      if (r.winners.length > 1) {
+        row.push('TIE: ' + r.winners.join(' / ') + ' (' + r.wins + ' wins each)');
+      } else {
+        const suffix = r.resolvedBy ? ', won tiebreaker on ' + r.resolvedBy : '';
+        row.push(r.winners[0] + ' (' + r.wins + ' wins' + suffix + ')');
+      }
     });
     return row;
   });
@@ -596,13 +666,13 @@ function writeDivisionWinners(divSheet, members, complete, pickedCounts, numGame
   divSheet.autoResizeColumns(1, header.length);
 }
 
-function writeTally(tallySheet, members, complete, winCounts, divNames) {
+function writeTally(tallySheet, members, complete, results, divNames) {
   const completeCount = complete.filter(Boolean).length;
   const out = [];
   out.push(['Tally based on ' + completeCount + ' of ' + members.length + ' members with complete picks']);
   out.push(['']);
 
-  divNames.forEach(function (div) {
+  divNames.forEach(function (div, d) {
     const teams = DIVISIONS[div];
     out.push([div]);
 
@@ -610,9 +680,8 @@ function writeTally(tallySheet, members, complete, winCounts, divNames) {
       let votes = 0;
       members.forEach(function (mem, m) {
         if (!complete[m]) return;
-        const counts = teams.map(function (t) { return winCounts[m][t] || 0; });
-        const max = Math.max.apply(null, counts);
-        if (max > 0 && (winCounts[m][team] || 0) === max) votes++;
+        const r = results[d][m];
+        if (r.wins > 0 && r.winners.indexOf(team) !== -1) votes++;
       });
       return [team, votes];
     });
