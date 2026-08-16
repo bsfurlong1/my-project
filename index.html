@@ -290,7 +290,7 @@
           </div>
           <div class="hint" id="csvStatus"></div>
           <div style="margin-top:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-            <button class="btn secondary btn-sm" id="fetchInjuriesBtn">Fetch injury data (ESPN)</button>
+            <button class="btn secondary btn-sm" id="fetchInjuriesBtn">Fetch injury data</button>
           </div>
           <div class="hint" id="injuryStatus"></div>
         </div>
@@ -541,8 +541,9 @@
     return lines.join("\n");
   }
 
-  // ---------- Injury data (ESPN) ----------
-  // ESPN's site API is undocumented and unofficial; endpoints/shapes can change without notice.
+  // ---------- Injury data (Sleeper) ----------
+  // Sleeper's players API is public and free but still someone else's undocumented-ish
+  // service; endpoints/shapes can change without notice, hence the defensive parsing below.
   var TEAM_ABBR_ALIASES = {
     WAS: "WSH", JAC: "JAX", GNB: "GB", SFO: "SF", TAM: "TB", KAN: "KC",
     NWE: "NE", NOR: "NO", LA: "LAR", STL: "LAR", SD: "LAC", OAK: "LV"
@@ -582,8 +583,6 @@
     return "<span class='badge " + cls + "' title='" + escapeHtml(title) + "'>" + escapeHtml(shortInjuryLabel(injury.status)) + "</span>";
   }
 
-  function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
-
   // Returns {ok:true, data} or {ok:false, error} — never throws — so callers can tell
   // a network/CORS block (fetch itself rejects) apart from an unexpected response shape.
   function fetchJson(url) {
@@ -601,17 +600,29 @@
     });
   }
 
-  function extractTeamList(data) {
-    try {
-      return data.sports[0].leagues[0].teams.map(function (item) {
-        var team = item.team || item;
-        return { id: team.id, abbreviation: team.abbreviation || team.shortDisplayName || "" };
-      }).filter(function (t) { return t.id; });
-    } catch (e) { return []; }
+  // Sleeper's public players endpoint: a single JSON object keyed by player_id, each with
+  // injury_status/injury_body_part fields. No API key, and (unlike ESPN's site API) it's
+  // meant for exactly this kind of third-party client-side use.
+  function extractInjuriesFromSleeper(data) {
+    var out = [];
+    if (!data || typeof data !== "object") return out;
+    Object.keys(data).forEach(function (id) {
+      var p = data[id];
+      if (!p || !p.injury_status) return;
+      var name = p.full_name || ((p.first_name || "") + " " + (p.last_name || "")).trim();
+      if (!name) return;
+      out.push({
+        name: name,
+        status: p.injury_status,
+        detail: p.injury_body_part || p.injury_notes || "",
+        team: p.team || ""
+      });
+    });
+    return out;
   }
 
-  // Generic fallback: walk the response looking for {displayName/fullName, status} pairs
-  // that look like injury entries, in case ESPN's exact shape differs from what we expect.
+  // Generic fallback in case Sleeper's field names change: walk the response looking for
+  // any object with a name-like field and a status-like field matching a known injury term.
   function scanForInjuries(node, results, depth) {
     if (!node || depth > 8 || results.length > 500) return;
     if (Array.isArray(node)) {
@@ -619,41 +630,18 @@
       return;
     }
     if (typeof node !== "object") return;
-    var name = node.displayName || node.fullName ||
+    var name = node.full_name || node.displayName || node.fullName ||
       (node.athlete && (node.athlete.displayName || node.athlete.fullName));
-    var status = typeof node.status === "string" ? node.status :
+    var status = typeof node.injury_status === "string" ? node.injury_status :
+      typeof node.status === "string" ? node.status :
       (node.type && typeof node.type.description === "string" ? node.type.description : null);
     if (name && status && INJURY_STATUS_RE.test(status.trim()) && status.trim().toLowerCase() !== "active") {
-      results.push({ name: name, status: status, detail: (node.details && (node.details.detail || node.details.type)) || "" });
+      results.push({
+        name: name, status: status,
+        detail: node.injury_body_part || node.injury_notes || (node.details && (node.details.detail || node.details.type)) || ""
+      });
     }
     Object.keys(node).forEach(function (k) { scanForInjuries(node[k], results, depth + 1); });
-  }
-
-  function extractInjuriesFromTeam(data, fallbackAbbr) {
-    var out = [];
-    try {
-      var team = data && data.team;
-      var abbr = (team && team.abbreviation) || fallbackAbbr || "";
-      var list = team && Array.isArray(team.injuries) ? team.injuries : [];
-      list.forEach(function (item) {
-        var athlete = item.athlete || item.player || {};
-        var name = athlete.displayName || athlete.fullName || athlete.shortName || item.displayName;
-        if (!name) return;
-        var status = item.status || (item.type && (item.type.description || item.type.name)) ||
-          (Array.isArray(item.injuries) && item.injuries[0] && item.injuries[0].status) || "";
-        if (!status) return;
-        var detailObj = item.details || {};
-        var detail = detailObj.detail || detailObj.type || item.shortComment || "";
-        out.push({ name: name, status: status, detail: detail, team: abbr });
-      });
-    } catch (e) { /* fall through to generic scan below */ }
-    if (!out.length) {
-      var scanned = [];
-      scanForInjuries(data, scanned, 0);
-      scanned.forEach(function (s) { s.team = s.team || fallbackAbbr; });
-      out = scanned;
-    }
-    return out;
   }
 
   function mergeInjuries(list) {
@@ -684,49 +672,33 @@
     var btn = el("fetchInjuriesBtn");
     var status = el("injuryStatus");
     btn.disabled = true;
-    status.textContent = "Fetching NFL team list from ESPN...";
+    status.textContent = "Fetching injury data from Sleeper...";
     try {
-      var teamsResult = await fetchJson("https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams?limit=40");
-      if (!teamsResult.ok) {
-        throw new Error("your browser blocked the request to ESPN (" + teamsResult.error +
-          ") — this is almost always a CORS restriction, not a bug here; ESPN's API may not allow " +
-          "requests from this page's origin (" + location.origin + (location.protocol === "file:" ? ", i.e. opening the file directly" : "") + ")");
+      var result = await fetchJson("https://api.sleeper.app/v1/players/nfl");
+      if (!result.ok) {
+        throw new Error("your browser blocked the request (" + result.error +
+          ") — likely a CORS or network restriction on this page's origin (" + location.origin + ")");
       }
-      console.log("[injury debug] teams list raw response:", teamsResult.data);
-      var teams = extractTeamList(teamsResult.data);
-      if (!teams.length) throw new Error("ESPN's team list came back but not in the shape we expected — see '[injury debug] teams list raw response' in the console");
+      console.log("[injury debug] sleeper player count:", Object.keys(result.data || {}).length);
 
-      var allInjuries = [];
-      var failures = 0;
-      for (var i = 0; i < teams.length; i++) {
-        var t = teams[i];
-        status.textContent = "Fetching injuries " + (i + 1) + "/" + teams.length + " (" + (t.abbreviation || t.id) + ")...";
-        var detailResult = await fetchJson("https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/" + t.id + "?enable=injuries");
-        if (!detailResult.ok) {
-          failures++;
-          if (i === 0) console.warn("[injury debug] first team fetch failed:", detailResult.error);
-          continue;
-        }
-        var detail = detailResult.data;
-        var extracted = extractInjuriesFromTeam(detail, t.abbreviation);
-        if (i === 0) {
-          console.log("[injury debug] raw response for", t.abbreviation, detail);
-          console.log("[injury debug] extracted from it:", extracted);
-        }
-        allInjuries = allInjuries.concat(extracted);
-        await sleep(120);
+      var allInjuries = extractInjuriesFromSleeper(result.data);
+      if (!allInjuries.length) {
+        // Sleeper's shape may have changed — fall back to a generic scan before giving up.
+        var scanned = [];
+        scanForInjuries(result.data, scanned, 0);
+        allInjuries = scanned;
       }
+      console.log("[injury debug] injuries found:", allInjuries.length, allInjuries.slice(0, 10));
 
-      console.log("[injury debug] total injuries found across all teams:", allInjuries.length, allInjuries.slice(0, 10));
       var matched = mergeInjuries(allInjuries);
       console.log("[injury debug] matched", matched, "of", state.rankings.length, "rankings");
       state.injuriesFetchedAt = new Date().toISOString();
       save();
       renderRankingsPreview();
       renderDraft();
-      status.textContent = "Fetched " + allInjuries.length + " injury designation(s) from ESPN" +
-        (failures ? " (" + failures + " team(s) failed)" : "") + " — matched to " + matched +
-        " of your " + state.rankings.length + " players. Last updated " + new Date(state.injuriesFetchedAt).toLocaleString() + ".";
+      status.textContent = "Fetched " + allInjuries.length + " injury designation(s) from Sleeper — matched to " +
+        matched + " of your " + state.rankings.length + " players. Last updated " +
+        new Date(state.injuriesFetchedAt).toLocaleString() + ".";
       toast("Injury data updated: " + matched + " players matched.");
     } catch (err) {
       status.textContent = "Couldn't fetch injury data: " + (err && err.message ? err.message : err) + ".";
