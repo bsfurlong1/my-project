@@ -202,6 +202,7 @@
   .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 700; }
   .badge.good { background: var(--good-bg); color: var(--good); }
   .badge.bad { background: var(--bad-bg); color: var(--bad); }
+  .badge.warn { background: var(--warn-bg); color: #9a6700; }
   .badge.neutral { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
 
   .muted { color: var(--muted); }
@@ -288,12 +289,16 @@
             <button class="btn danger btn-sm" id="clearRankingsBtn">Clear rankings</button>
           </div>
           <div class="hint" id="csvStatus"></div>
+          <div style="margin-top:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <button class="btn secondary btn-sm" id="fetchInjuriesBtn">Fetch injury data (ESPN)</button>
+          </div>
+          <div class="hint" id="injuryStatus"></div>
         </div>
         <div>
           <label>Current rankings (<span id="rankingsCount">0</span> players)</label>
           <div class="table-scroll" style="max-height:260px;">
             <table>
-              <thead><tr><th>#</th><th>Name</th><th>Pos</th><th>Team</th></tr></thead>
+              <thead><tr><th>#</th><th>Name</th><th>Pos</th><th>Team</th><th>Inj</th></tr></thead>
               <tbody id="rankingsPreview"></tbody>
             </table>
           </div>
@@ -328,7 +333,7 @@
         <div class="hint" id="voiceStatus"></div>
         <div class="table-scroll" style="margin-top:10px;">
           <table>
-            <thead><tr><th>Rk</th><th>Player</th><th>Pos</th><th>Team</th><th></th></tr></thead>
+            <thead><tr><th>Rk</th><th>Player</th><th>Pos</th><th>Team</th><th>Inj</th><th></th></tr></thead>
             <tbody id="bestAvailableBody"></tbody>
           </table>
         </div>
@@ -407,10 +412,11 @@
     yourTeamIndex: 0,
     teamNames: [],
     rosterSlots: Object.assign({}, DEFAULT_ROSTER),
-    rankings: [],   // {rank, name, pos, team, bye}
+    rankings: [],   // {rank, name, pos, team, bye, injury?: {status, detail}}
     picks: [],      // {pickNumber, teamIndex, name, pos, team, rank, manual}
     posFilter: "ALL",
-    search: ""
+    search: "",
+    injuriesFetchedAt: null
   };
 
   function defaultTeamNames(n) {
@@ -473,20 +479,30 @@
     if (!lines.length) return { players: [], errors: ["No data found."] };
 
     var first = parseCsvLine(lines[0]).map(function (s) { return s.toLowerCase(); });
-    var hasHeader = first.indexOf("name") !== -1 || first.indexOf("rank") !== -1 || first.indexOf("position") !== -1 || first.indexOf("pos") !== -1;
+    var hasHeader = first.indexOf("name") !== -1 || first.indexOf("rank") !== -1 || first.indexOf("position") !== -1 ||
+      first.indexOf("pos") !== -1 || first.indexOf("overall") !== -1 || first.indexOf("adp") !== -1;
 
     var colIdx = { rank: 0, name: 1, pos: 2, team: 3, bye: 4 };
     var start = 0;
     if (hasHeader) {
       start = 1;
-      colIdx = {};
-      first.forEach(function (h, i) {
-        if (h === "rank" || h === "rk" || h === "overall") colIdx.rank = i;
-        else if (h === "name" || h === "player") colIdx.name = i;
-        else if (h === "position" || h === "pos") colIdx.pos = i;
-        else if (h === "team" || h === "nfl team" || h === "tm") colIdx.team = i;
-        else if (h === "bye" || h === "bye week") colIdx.bye = i;
-      });
+      // Map every recognized header to its column, then pick the best match per field
+      // so a more specific column (e.g. "Overall") wins over a looser one (e.g. "ADP").
+      var headerMap = {};
+      first.forEach(function (h, i) { if (!(h in headerMap)) headerMap[h] = i; });
+      var pick = function () {
+        for (var a = 0; a < arguments.length; a++) {
+          if (arguments[a] in headerMap) return headerMap[arguments[a]];
+        }
+        return undefined;
+      };
+      colIdx = {
+        rank: pick("rank", "rk", "overall", "adp"),
+        name: pick("name", "player"),
+        pos: pick("position", "pos"),
+        team: pick("team", "nfl team", "tm"),
+        bye: pick("bye", "bye week")
+      };
     }
 
     var players = [];
@@ -497,7 +513,7 @@
       var name = colIdx.name !== undefined ? cols[colIdx.name] : cols[1];
       if (!name) { errors.push("Line " + (i + 1) + ": missing name, skipped."); continue; }
       var rankRaw = colIdx.rank !== undefined ? cols[colIdx.rank] : cols[0];
-      var rank = parseInt(rankRaw, 10);
+      var rank = parseFloat(rankRaw);
       players.push({
         rank: isNaN(rank) ? (players.length + 1) : rank,
         name: name,
@@ -510,6 +526,10 @@
     return { players: players, errors: errors };
   }
 
+  function formatRank(r) {
+    return Number.isInteger(r) ? String(r) : r.toFixed(1);
+  }
+
   function sampleCsv() {
     var positions = ["RB", "WR", "RB", "WR", "QB", "TE", "RB", "WR", "WR", "RB",
       "QB", "TE", "WR", "RB", "WR", "QB", "RB", "TE", "WR", "RB",
@@ -519,6 +539,177 @@
       lines.push((i + 1) + ",Sample " + pos + " " + (i + 1) + "," + pos + ",SMP," + (1 + (i % 14)));
     });
     return lines.join("\n");
+  }
+
+  // ---------- Injury data (ESPN) ----------
+  // ESPN's site API is undocumented and unofficial; endpoints/shapes can change without notice.
+  var TEAM_ABBR_ALIASES = {
+    WAS: "WSH", JAC: "JAX", GNB: "GB", SFO: "SF", TAM: "TB", KAN: "KC",
+    NWE: "NE", NOR: "NO", LA: "LAR", STL: "LAR", SD: "LAC", OAK: "LV"
+  };
+  var INJURY_STATUS_RE = /^(out|doubtful|questionable|day-?to-?day|injured reserve|\bir\b|pup|physically unable to perform|suspended|probable|limited)$/i;
+
+  function normalizeTeamAbbr(a) {
+    a = String(a || "").toUpperCase().trim();
+    return TEAM_ABBR_ALIASES[a] || a;
+  }
+
+  function injuryBadgeClass(status) {
+    var s = String(status || "").toUpperCase().trim();
+    if (!s || s === "ACTIVE" || s === "PROBABLE") return "";
+    if (/OUT|RESERVE|\bIR\b|PUP|SUSPEND|DOUBTFUL/.test(s)) return "bad";
+    if (/QUESTIONABLE|DAY.TO.DAY|LIMITED/.test(s)) return "warn";
+    return "neutral";
+  }
+
+  function shortInjuryLabel(status) {
+    var s = String(status || "").toUpperCase();
+    if (/^OUT$/.test(s)) return "OUT";
+    if (/QUESTIONABLE/.test(s)) return "Q";
+    if (/DOUBTFUL/.test(s)) return "D";
+    if (/RESERVE|\bIR\b/.test(s)) return "IR";
+    if (/PUP|PHYSICALLY UNABLE/.test(s)) return "PUP";
+    if (/DAY.TO.DAY/.test(s)) return "DTD";
+    if (/SUSPEND/.test(s)) return "SUSP";
+    return status;
+  }
+
+  function injuryBadgeHtml(injury) {
+    if (!injury || !injury.status) return "";
+    var cls = injuryBadgeClass(injury.status);
+    if (!cls) return "";
+    var title = injury.detail ? (injury.status + " — " + injury.detail) : injury.status;
+    return "<span class='badge " + cls + "' title='" + escapeHtml(title) + "'>" + escapeHtml(shortInjuryLabel(injury.status)) + "</span>";
+  }
+
+  function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
+
+  function fetchJson(url) {
+    return fetch(url).then(function (resp) {
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      return resp.json();
+    }).catch(function (err) {
+      console.warn("Injury data fetch failed for", url, err);
+      return null;
+    });
+  }
+
+  function extractTeamList(data) {
+    try {
+      return data.sports[0].leagues[0].teams.map(function (item) {
+        var team = item.team || item;
+        return { id: team.id, abbreviation: team.abbreviation || team.shortDisplayName || "" };
+      }).filter(function (t) { return t.id; });
+    } catch (e) { return []; }
+  }
+
+  // Generic fallback: walk the response looking for {displayName/fullName, status} pairs
+  // that look like injury entries, in case ESPN's exact shape differs from what we expect.
+  function scanForInjuries(node, results, depth) {
+    if (!node || depth > 8 || results.length > 500) return;
+    if (Array.isArray(node)) {
+      node.forEach(function (item) { scanForInjuries(item, results, depth + 1); });
+      return;
+    }
+    if (typeof node !== "object") return;
+    var name = node.displayName || node.fullName ||
+      (node.athlete && (node.athlete.displayName || node.athlete.fullName));
+    var status = typeof node.status === "string" ? node.status :
+      (node.type && typeof node.type.description === "string" ? node.type.description : null);
+    if (name && status && INJURY_STATUS_RE.test(status.trim()) && status.trim().toLowerCase() !== "active") {
+      results.push({ name: name, status: status, detail: (node.details && (node.details.detail || node.details.type)) || "" });
+    }
+    Object.keys(node).forEach(function (k) { scanForInjuries(node[k], results, depth + 1); });
+  }
+
+  function extractInjuriesFromTeam(data, fallbackAbbr) {
+    var out = [];
+    try {
+      var team = data && data.team;
+      var abbr = (team && team.abbreviation) || fallbackAbbr || "";
+      var list = team && Array.isArray(team.injuries) ? team.injuries : [];
+      list.forEach(function (item) {
+        var athlete = item.athlete || item.player || {};
+        var name = athlete.displayName || athlete.fullName || athlete.shortName || item.displayName;
+        if (!name) return;
+        var status = item.status || (item.type && (item.type.description || item.type.name)) ||
+          (Array.isArray(item.injuries) && item.injuries[0] && item.injuries[0].status) || "";
+        if (!status) return;
+        var detailObj = item.details || {};
+        var detail = detailObj.detail || detailObj.type || item.shortComment || "";
+        out.push({ name: name, status: status, detail: detail, team: abbr });
+      });
+    } catch (e) { /* fall through to generic scan below */ }
+    if (!out.length) {
+      var scanned = [];
+      scanForInjuries(data, scanned, 0);
+      scanned.forEach(function (s) { s.team = s.team || fallbackAbbr; });
+      out = scanned;
+    }
+    return out;
+  }
+
+  function mergeInjuries(list) {
+    var idx = {};
+    list.forEach(function (inj) {
+      var key = normalizeForMatch(inj.name);
+      if (!key) return;
+      idx[key] = idx[key] || [];
+      idx[key].push(inj);
+    });
+    var matched = 0;
+    state.rankings.forEach(function (p) {
+      var candidates = idx[normalizeForMatch(p.name)];
+      if (!candidates || !candidates.length) { delete p.injury; return; }
+      var chosen = candidates[0];
+      if (candidates.length > 1 && p.team) {
+        var teamMatch = candidates.filter(function (c) { return normalizeTeamAbbr(c.team) === normalizeTeamAbbr(p.team); });
+        if (teamMatch.length) chosen = teamMatch[0];
+      }
+      p.injury = { status: chosen.status, detail: chosen.detail || "" };
+      matched++;
+    });
+    return matched;
+  }
+
+  async function fetchInjuries() {
+    if (!state.rankings.length) { toast("Import rankings first."); return; }
+    var btn = el("fetchInjuriesBtn");
+    var status = el("injuryStatus");
+    btn.disabled = true;
+    status.textContent = "Fetching NFL team list from ESPN...";
+    try {
+      var teamsData = await fetchJson("https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams?limit=40");
+      var teams = extractTeamList(teamsData);
+      if (!teams.length) throw new Error("couldn't read the team list from ESPN's response");
+
+      var allInjuries = [];
+      var failures = 0;
+      for (var i = 0; i < teams.length; i++) {
+        var t = teams[i];
+        status.textContent = "Fetching injuries " + (i + 1) + "/" + teams.length + " (" + (t.abbreviation || t.id) + ")...";
+        var detail = await fetchJson("https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/" + t.id + "?enable=injuries");
+        if (!detail) { failures++; continue; }
+        allInjuries = allInjuries.concat(extractInjuriesFromTeam(detail, t.abbreviation));
+        await sleep(120);
+      }
+
+      var matched = mergeInjuries(allInjuries);
+      state.injuriesFetchedAt = new Date().toISOString();
+      save();
+      renderRankingsPreview();
+      renderDraft();
+      status.textContent = "Fetched " + allInjuries.length + " injury designation(s) from ESPN" +
+        (failures ? " (" + failures + " team(s) failed)" : "") + " — matched to " + matched +
+        " of your " + state.rankings.length + " players. Last updated " + new Date(state.injuriesFetchedAt).toLocaleString() + ".";
+      toast("Injury data updated: " + matched + " players matched.");
+    } catch (err) {
+      status.textContent = "Couldn't fetch injury data (" + (err && err.message ? err.message : err) +
+        "). Your browser or network may be blocking requests to ESPN — check the console and try again.";
+      toast("Injury fetch failed.");
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   // ---------- Draft order ----------
@@ -665,8 +856,9 @@
     body.innerHTML = "";
     state.rankings.slice(0, 300).forEach(function (p) {
       var tr = document.createElement("tr");
-      tr.innerHTML = "<td>" + p.rank + "</td><td>" + escapeHtml(p.name) + "</td>" +
-        "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>";
+      tr.innerHTML = "<td>" + formatRank(p.rank) + "</td><td>" + escapeHtml(p.name) + "</td>" +
+        "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>" +
+        "<td>" + injuryBadgeHtml(p.injury) + "</td>";
       body.appendChild(tr);
     });
   }
@@ -885,8 +1077,9 @@
         btn.addEventListener("click", function () { draftPlayer(player, false); });
       })(p);
       tdBtn.appendChild(btn);
-      tr.innerHTML = "<td>" + p.rank + "</td><td>" + escapeHtml(p.name) + "</td>" +
-        "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>";
+      tr.innerHTML = "<td>" + formatRank(p.rank) + "</td><td>" + escapeHtml(p.name) + "</td>" +
+        "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>" +
+        "<td>" + injuryBadgeHtml(p.injury) + "</td>";
       tr.appendChild(tdBtn);
       body.appendChild(tr);
     }
@@ -1017,8 +1210,8 @@
         "<td>" + r.picks + "</td>" +
         "<td>" + (r.avg === null ? "—" : r.avg.toFixed(1)) + "</td>" +
         "<td>" + gradeBadge + "</td>" +
-        "<td>" + (r.best ? escapeHtml(r.best.name) + " (+" + r.best.v + ")" : "—") + "</td>" +
-        "<td>" + (r.worst ? escapeHtml(r.worst.name) + " (" + r.worst.v + ")" : "—") + "</td>";
+        "<td>" + (r.best ? escapeHtml(r.best.name) + " (+" + r.best.v.toFixed(1) + ")" : "—") + "</td>" +
+        "<td>" + (r.worst ? escapeHtml(r.worst.name) + " (" + r.worst.v.toFixed(1) + ")" : "—") + "</td>";
       body.appendChild(tr);
     });
   }
@@ -1105,6 +1298,8 @@
       renderDraft();
     });
 
+    el("fetchInjuriesBtn").addEventListener("click", fetchInjuries);
+
     el("searchBox").addEventListener("input", function () {
       state.search = el("searchBox").value;
       renderDraft();
@@ -1169,6 +1364,9 @@
     renderGrades();
     wireEvents();
     initVoice();
+    if (state.injuriesFetchedAt) {
+      el("injuryStatus").textContent = "Injury data last updated " + new Date(state.injuriesFetchedAt).toLocaleString() + ".";
+    }
   }
 
   document.addEventListener("DOMContentLoaded", init);
