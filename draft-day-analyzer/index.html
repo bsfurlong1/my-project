@@ -323,7 +323,7 @@
         <div class="filters" id="posFilters"></div>
         <div style="display:flex; gap:6px;">
           <input type="text" id="searchBox" placeholder="Search player name, or use voice..." style="flex:1;">
-          <button class="btn secondary btn-sm" id="voiceBtn" type="button" title='Say "draft &lt;player&gt;" to draft, or "search &lt;player&gt;" to filter'>🎤 Voice</button>
+          <button class="btn secondary btn-sm" id="voiceBtn" type="button" title='Say "draft &lt;player&gt;", "draft &lt;player&gt; for &lt;team&gt;", "switch to &lt;team&gt;", or "search &lt;player&gt;"'>🎤 Voice</button>
         </div>
         <div class="hint" id="voiceStatus"></div>
         <div class="table-scroll" style="margin-top:10px;">
@@ -716,10 +716,55 @@
     renderDraft();
   }
 
+  function findTeamIndex(query) {
+    var q = normalizeForMatch(query);
+    if (!q) return -1;
+    if (q === "me" || q === "my team" || q === "myself" || q === "us") return state.yourTeamIndex;
+    for (var i = 0; i < state.teamNames.length; i++) {
+      if (normalizeForMatch(state.teamNames[i]) === q) return i;
+    }
+    var numMatch = q.match(/^(?:team\s*)?(\d+)$/);
+    if (numMatch) {
+      var n = parseInt(numMatch[1], 10) - 1;
+      if (n >= 0 && n < state.teamNames.length) return n;
+    }
+    for (var j = 0; j < state.teamNames.length; j++) {
+      if (normalizeForMatch(state.teamNames[j]).indexOf(q) !== -1) return j;
+    }
+    return -1;
+  }
+
+  function draftForTeam(playerQuery, teamQuery) {
+    var teamIdx = findTeamIndex(teamQuery);
+    if (teamIdx === -1) { toast('Voice: no team matches "' + teamQuery + '"'); return; }
+    var matches = findPlayerMatches(playerQuery);
+    if (!matches.length) { toast('Voice: no available match for "' + playerQuery + '"'); return; }
+    draftPlayer(matches[0], false, teamIdx);
+    setSearch("");
+    toast("Voice draft: " + matches[0].name + " → " + (state.teamNames[teamIdx] || ("Team " + (teamIdx + 1))));
+  }
+
   function handleVoiceTranscript(transcript) {
     var t = transcript.trim();
     var lower = t.toLowerCase();
-    var m = lower.match(/^(?:draft|pick|take)\s+(.+)$/);
+    var m;
+
+    m = lower.match(/^(?:draft|pick|take)\s+(.+?)\s+for\s+(.+)$/);
+    if (m) { draftForTeam(m[1], m[2]); return; }
+
+    m = lower.match(/^(.+?)\s+(?:drafts?|picks?|takes?)\s+(.+)$/);
+    if (m && findTeamIndex(m[1]) !== -1) { draftForTeam(m[2], m[1]); return; }
+
+    m = lower.match(/^(?:switch to|drafting for|now drafting for|for)\s+(.+)$/);
+    if (m) {
+      var switchIdx = findTeamIndex(m[1]);
+      if (switchIdx === -1) { toast('Voice: no team matches "' + m[1] + '"'); return; }
+      el("draftingForOverride").value = switchIdx;
+      toast("Now drafting for: " + (state.teamNames[switchIdx] || ("Team " + (switchIdx + 1))));
+      return;
+    }
+
+    m = lower.match(/^(?:draft|pick|take)\s+(.+)$/);
     if (m) {
       var matches = findPlayerMatches(m[1]);
       if (!matches.length) { toast('Voice: no available match for "' + m[1] + '"'); return; }
@@ -763,7 +808,7 @@
       recognizing = true;
       micBtn.classList.add("listening");
       micBtn.textContent = "🎙️ Listening…";
-      status.textContent = 'Listening — try "draft <player>" or "search <player>"...';
+      status.textContent = 'Listening — try "draft <player>", "draft <player> for <team>", or "switch to <team>"...';
     });
     recognition.addEventListener("result", function (e) {
       var transcript = e.results[0][0].transcript;
@@ -860,11 +905,16 @@
     el("undoBtn").disabled = state.picks.length === 0;
   }
 
-  function draftPlayer(player, manual) {
+  function draftPlayer(player, manual, teamIdxOverride) {
     if (state.numTeams <= 0) { toast("Set up teams first."); return; }
     var pickNumber = state.picks.length + 1;
-    var overrideVal = el("draftingForOverride").value;
-    var teamIdx = overrideVal !== "" ? parseInt(overrideVal, 10) : teamIndexForPick(pickNumber);
+    var teamIdx;
+    if (typeof teamIdxOverride === "number") {
+      teamIdx = teamIdxOverride;
+    } else {
+      var overrideVal = el("draftingForOverride").value;
+      teamIdx = overrideVal !== "" ? parseInt(overrideVal, 10) : teamIndexForPick(pickNumber);
+    }
     state.picks.push({
       pickNumber: pickNumber,
       teamIndex: teamIdx,
