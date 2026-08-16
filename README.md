@@ -41,3 +41,11 @@ re-run anything), via an `onEdit` trigger.
 
 To change the season, edit the `SEASON` constant at the top of `Code.gs`
 before running Initialize.
+
+## Fantasy Draft Day Analyzer
+
+A separate, standalone tool for draft day itself — see
+[`draft-day-analyzer/`](draft-day-analyzer/). It's a single self-contained
+HTML file (no server, no build step): open it in a browser to track live
+draft picks, see the best available player by your imported rankings, watch
+each team's roster needs fill in, and get a running draft grade.
