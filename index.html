@@ -467,20 +467,30 @@
     if (!lines.length) return { players: [], errors: ["No data found."] };
 
     var first = parseCsvLine(lines[0]).map(function (s) { return s.toLowerCase(); });
-    var hasHeader = first.indexOf("name") !== -1 || first.indexOf("rank") !== -1 || first.indexOf("position") !== -1 || first.indexOf("pos") !== -1;
+    var hasHeader = first.indexOf("name") !== -1 || first.indexOf("rank") !== -1 || first.indexOf("position") !== -1 ||
+      first.indexOf("pos") !== -1 || first.indexOf("overall") !== -1 || first.indexOf("adp") !== -1;
 
     var colIdx = { rank: 0, name: 1, pos: 2, team: 3, bye: 4 };
     var start = 0;
     if (hasHeader) {
       start = 1;
-      colIdx = {};
-      first.forEach(function (h, i) {
-        if (h === "rank" || h === "rk" || h === "overall") colIdx.rank = i;
-        else if (h === "name" || h === "player") colIdx.name = i;
-        else if (h === "position" || h === "pos") colIdx.pos = i;
-        else if (h === "team" || h === "nfl team" || h === "tm") colIdx.team = i;
-        else if (h === "bye" || h === "bye week") colIdx.bye = i;
-      });
+      // Map every recognized header to its column, then pick the best match per field
+      // so a more specific column (e.g. "Overall") wins over a looser one (e.g. "ADP").
+      var headerMap = {};
+      first.forEach(function (h, i) { if (!(h in headerMap)) headerMap[h] = i; });
+      var pick = function () {
+        for (var a = 0; a < arguments.length; a++) {
+          if (arguments[a] in headerMap) return headerMap[arguments[a]];
+        }
+        return undefined;
+      };
+      colIdx = {
+        rank: pick("rank", "rk", "overall", "adp"),
+        name: pick("name", "player"),
+        pos: pick("position", "pos"),
+        team: pick("team", "nfl team", "tm"),
+        bye: pick("bye", "bye week")
+      };
     }
 
     var players = [];
@@ -491,7 +501,7 @@
       var name = colIdx.name !== undefined ? cols[colIdx.name] : cols[1];
       if (!name) { errors.push("Line " + (i + 1) + ": missing name, skipped."); continue; }
       var rankRaw = colIdx.rank !== undefined ? cols[colIdx.rank] : cols[0];
-      var rank = parseInt(rankRaw, 10);
+      var rank = parseFloat(rankRaw);
       players.push({
         rank: isNaN(rank) ? (players.length + 1) : rank,
         name: name,
@@ -502,6 +512,10 @@
     }
     players.sort(function (a, b) { return a.rank - b.rank; });
     return { players: players, errors: errors };
+  }
+
+  function formatRank(r) {
+    return Number.isInteger(r) ? String(r) : r.toFixed(1);
   }
 
   function sampleCsv() {
@@ -659,7 +673,7 @@
     body.innerHTML = "";
     state.rankings.slice(0, 300).forEach(function (p) {
       var tr = document.createElement("tr");
-      tr.innerHTML = "<td>" + p.rank + "</td><td>" + escapeHtml(p.name) + "</td>" +
+      tr.innerHTML = "<td>" + formatRank(p.rank) + "</td><td>" + escapeHtml(p.name) + "</td>" +
         "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>";
       body.appendChild(tr);
     });
@@ -731,7 +745,7 @@
         btn.addEventListener("click", function () { draftPlayer(player, false); });
       })(p);
       tdBtn.appendChild(btn);
-      tr.innerHTML = "<td>" + p.rank + "</td><td>" + escapeHtml(p.name) + "</td>" +
+      tr.innerHTML = "<td>" + formatRank(p.rank) + "</td><td>" + escapeHtml(p.name) + "</td>" +
         "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>";
       tr.appendChild(tdBtn);
       body.appendChild(tr);
@@ -858,8 +872,8 @@
         "<td>" + r.picks + "</td>" +
         "<td>" + (r.avg === null ? "—" : r.avg.toFixed(1)) + "</td>" +
         "<td>" + gradeBadge + "</td>" +
-        "<td>" + (r.best ? escapeHtml(r.best.name) + " (+" + r.best.v + ")" : "—") + "</td>" +
-        "<td>" + (r.worst ? escapeHtml(r.worst.name) + " (" + r.worst.v + ")" : "—") + "</td>";
+        "<td>" + (r.best ? escapeHtml(r.best.name) + " (+" + r.best.v.toFixed(1) + ")" : "—") + "</td>" +
+        "<td>" + (r.worst ? escapeHtml(r.worst.name) + " (" + r.worst.v.toFixed(1) + ")" : "—") + "</td>";
       body.appendChild(tr);
     });
   }
