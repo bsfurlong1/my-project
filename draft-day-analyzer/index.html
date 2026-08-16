@@ -135,6 +135,8 @@
   button.btn.danger { background: var(--bad); color: #fff; }
   button.btn:disabled { opacity: .45; cursor: not-allowed; }
   button.btn-sm { padding: 4px 9px; font-size: 12px; border-radius: 5px; }
+  button.btn.listening { background: var(--bad); color: #fff; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .6; } }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
@@ -319,7 +321,11 @@
       <div class="panel">
         <h2>Best available</h2>
         <div class="filters" id="posFilters"></div>
-        <input type="text" id="searchBox" placeholder="Search player name...">
+        <div style="display:flex; gap:6px;">
+          <input type="text" id="searchBox" placeholder="Search player name, or use voice..." style="flex:1;">
+          <button class="btn secondary btn-sm" id="voiceBtn" type="button" title='Say "draft &lt;player&gt;" to draft, or "search &lt;player&gt;" to filter'>🎤 Voice</button>
+        </div>
+        <div class="hint" id="voiceStatus"></div>
         <div class="table-scroll" style="margin-top:10px;">
           <table>
             <thead><tr><th>Rk</th><th>Player</th><th>Pos</th><th>Team</th><th></th></tr></thead>
@@ -677,6 +683,109 @@
     return s;
   }
 
+  // ---------- Voice mode ----------
+  function normalizeForMatch(s) {
+    return String(s || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+  }
+
+  function findPlayerMatches(query) {
+    var q = normalizeForMatch(query);
+    if (!q) return [];
+    var drafted = draftedNameSet();
+    var qWords = q.split(/\s+/).filter(Boolean);
+    var scored = [];
+    state.rankings.forEach(function (p) {
+      if (drafted.has(p.name.toLowerCase())) return;
+      var name = normalizeForMatch(p.name);
+      var score;
+      if (name === q) score = 0;
+      else if (name.indexOf(q) !== -1) score = 1;
+      else if (qWords.every(function (qw) {
+        return name.split(/\s+/).some(function (nw) { return nw.indexOf(qw) === 0; });
+      })) score = 2;
+      else return;
+      scored.push({ p: p, score: score });
+    });
+    scored.sort(function (a, b) { return a.score !== b.score ? a.score - b.score : a.p.rank - b.p.rank; });
+    return scored.map(function (s) { return s.p; });
+  }
+
+  function setSearch(q) {
+    state.search = q;
+    el("searchBox").value = q;
+    renderDraft();
+  }
+
+  function handleVoiceTranscript(transcript) {
+    var t = transcript.trim();
+    var lower = t.toLowerCase();
+    var m = lower.match(/^(?:draft|pick|take)\s+(.+)$/);
+    if (m) {
+      var matches = findPlayerMatches(m[1]);
+      if (!matches.length) { toast('Voice: no available match for "' + m[1] + '"'); return; }
+      draftPlayer(matches[0], false);
+      setSearch("");
+      toast("Voice draft: " + matches[0].name);
+      return;
+    }
+    m = lower.match(/^(?:search|find|show)\s+(.+)$/);
+    if (m) { setSearch(m[1]); toast('Voice search: "' + m[1] + '"'); return; }
+    if (lower === "clear search" || lower === "clear") { setSearch(""); toast("Search cleared."); return; }
+    m = lower.match(/^(?:position|pos|filter)\s+(qb|rb|wr|te|dst|k|all)$/);
+    if (m) {
+      state.posFilter = m[1].toUpperCase();
+      renderDraft();
+      toast("Filter: " + state.posFilter);
+      return;
+    }
+    setSearch(t);
+    toast('Voice search: "' + t + '"');
+  }
+
+  function initVoice() {
+    var micBtn = el("voiceBtn");
+    var status = el("voiceStatus");
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      micBtn.disabled = true;
+      micBtn.title = "Voice input isn't supported in this browser (try Chrome or Edge).";
+      status.textContent = "Voice input isn't supported in this browser.";
+      return;
+    }
+    var recognition = new SR();
+    var recognizing = false;
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = "en-US";
+    recognition.maxAlternatives = 1;
+
+    recognition.addEventListener("start", function () {
+      recognizing = true;
+      micBtn.classList.add("listening");
+      micBtn.textContent = "🎙️ Listening…";
+      status.textContent = 'Listening — try "draft <player>" or "search <player>"...';
+    });
+    recognition.addEventListener("result", function (e) {
+      var transcript = e.results[0][0].transcript;
+      status.textContent = 'Heard: "' + transcript + '"';
+      handleVoiceTranscript(transcript);
+    });
+    recognition.addEventListener("error", function (e) {
+      status.textContent = e.error === "not-allowed" ?
+        "Microphone access denied." : "Voice error: " + e.error;
+    });
+    recognition.addEventListener("end", function () {
+      recognizing = false;
+      micBtn.classList.remove("listening");
+      micBtn.textContent = "🎤 Voice";
+    });
+
+    micBtn.addEventListener("click", function () {
+      if (recognizing) { recognition.stop(); return; }
+      try { recognition.start(); } catch (e) { /* recognition already starting */ }
+    });
+  }
+
   function renderPosFilters() {
     var wrap = el("posFilters");
     wrap.innerHTML = "";
@@ -1009,6 +1118,7 @@
     renderTeams();
     renderGrades();
     wireEvents();
+    initVoice();
   }
 
   document.addEventListener("DOMContentLoaded", init);

@@ -40,6 +40,25 @@ storage as you go, so refreshing the page won't lose your draft.
 Roster slot assignment is automatic: a pick fills the matching starter slot
 if open, else FLEX (for RB/WR/TE) if open, else bench.
 
+### Voice mode
+
+Click **🎤 Voice** next to the search box and speak a command (requires a
+browser with Web Speech API support, e.g. Chrome or Edge; the button is
+disabled otherwise):
+
+- **"draft `<player>`"** (or "pick"/"take") — finds the best-matching
+  undrafted player by name and drafts them immediately.
+- **"search `<player>`"** (or "find"/"show") — filters the best-available
+  list, same as typing in the search box.
+- **"position `<POS>`"** (or "pos"/"filter") — sets the position filter
+  (QB, RB, WR, TE, DST, K, or ALL).
+- **"clear search"** — clears the search box.
+- Anything else is treated as a search query.
+
+Name matching is fuzzy (exact match, then substring, then per-word prefix
+match) so close pronunciations of a player's name still resolve, and only
+undrafted players are considered.
+
 ## Teams & Needs tab
 
 One card per team showing every roster slot, filled player or "OPEN".
