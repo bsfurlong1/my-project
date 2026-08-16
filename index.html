@@ -690,11 +690,18 @@
         status.textContent = "Fetching injuries " + (i + 1) + "/" + teams.length + " (" + (t.abbreviation || t.id) + ")...";
         var detail = await fetchJson("https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/" + t.id + "?enable=injuries");
         if (!detail) { failures++; continue; }
-        allInjuries = allInjuries.concat(extractInjuriesFromTeam(detail, t.abbreviation));
+        var extracted = extractInjuriesFromTeam(detail, t.abbreviation);
+        if (i === 0) {
+          console.log("[injury debug] raw response for", t.abbreviation, detail);
+          console.log("[injury debug] extracted from it:", extracted);
+        }
+        allInjuries = allInjuries.concat(extracted);
         await sleep(120);
       }
 
+      console.log("[injury debug] total injuries found across all teams:", allInjuries.length, allInjuries.slice(0, 10));
       var matched = mergeInjuries(allInjuries);
+      console.log("[injury debug] matched", matched, "of", state.rankings.length, "rankings");
       state.injuriesFetchedAt = new Date().toISOString();
       save();
       renderRankingsPreview();
