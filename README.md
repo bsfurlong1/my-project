@@ -121,6 +121,14 @@ and only undrafted players are considered.
 
 ### Teams & Needs tab
 
+**Bye week check**: pick a team (defaults to yours) and see, for every week
+where two or more of its rostered players share a bye, whether that
+overlap leaves the team short of enough non-bye players at a starting
+position (including the RB/WR/TE pool that feeds FLEX) — e.g. rostering
+exactly 2 RBs who both have the same bye week. Only weeks with at least
+one shared bye are listed; a shortfall is flagged in red, otherwise
+"OK". Needs bye weeks in your imported rankings (the `bye` CSV column).
+
 One card per team showing every roster slot, filled player or "OPEN".
 Slots beyond your configured count that still get filled (e.g. extra bench
 picks) are marked with a `*`.
