@@ -298,7 +298,7 @@
           <label>Current rankings (<span id="rankingsCount">0</span> players)</label>
           <div class="table-scroll" style="max-height:260px;">
             <table>
-              <thead><tr><th>#</th><th>Name</th><th>Pos</th><th>Team</th><th>Inj</th></tr></thead>
+              <thead><tr><th>#</th><th>Name</th><th>Pos</th><th>Team</th><th>Bye</th><th>Inj</th></tr></thead>
               <tbody id="rankingsPreview"></tbody>
             </table>
           </div>
@@ -333,7 +333,7 @@
         <div class="hint" id="voiceStatus"></div>
         <div class="table-scroll" style="margin-top:10px;">
           <table>
-            <thead><tr><th>Rk</th><th>Player</th><th>Pos</th><th>Team</th><th>Inj</th><th></th></tr></thead>
+            <thead><tr><th>Rk</th><th>Player</th><th>Pos</th><th>Team</th><th>Bye</th><th>Inj</th><th></th></tr></thead>
             <tbody id="bestAvailableBody"></tbody>
           </table>
         </div>
@@ -854,6 +854,7 @@
       var tr = document.createElement("tr");
       tr.innerHTML = "<td>" + formatRank(p.rank) + "</td><td>" + escapeHtml(p.name) + "</td>" +
         "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>" +
+        "<td>" + escapeHtml(p.bye) + "</td>" +
         "<td>" + injuryBadgeHtml(p.injury) + "</td>";
       body.appendChild(tr);
     });
@@ -1075,6 +1076,7 @@
       tdBtn.appendChild(btn);
       tr.innerHTML = "<td>" + formatRank(p.rank) + "</td><td>" + escapeHtml(p.name) + "</td>" +
         "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>" +
+        "<td>" + escapeHtml(p.bye) + "</td>" +
         "<td>" + injuryBadgeHtml(p.injury) + "</td>";
       tr.appendChild(tdBtn);
       body.appendChild(tr);
