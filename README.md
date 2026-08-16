@@ -62,6 +62,15 @@ local storage as you go.
    upload a `.csv` file. Use **Load sample data** to try the app with
    placeholder players first — replace it with your real rankings before
    drafting for real.
+4. Once rankings are imported, click **Fetch injury data (ESPN)** to pull
+   current injury designations (Out, Doubtful, Questionable, IR, etc.)
+   from ESPN's public API and tag matching players — look for the colored
+   badge next to a player's name. Matching is by player name (with a team
+   check to disambiguate name collisions), so this works best once your
+   rankings are loaded. This calls ESPN's API directly from your browser;
+   it's unofficial and undocumented, so it can occasionally fail or return
+   nothing if ESPN changes something — the status line under the button
+   will say so if it does. Re-click any time to refresh.
 
 ### Draft tab
 
