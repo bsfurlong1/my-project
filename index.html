@@ -584,13 +584,20 @@
 
   function sleep(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
 
+  // Returns {ok:true, data} or {ok:false, error} — never throws — so callers can tell
+  // a network/CORS block (fetch itself rejects) apart from an unexpected response shape.
   function fetchJson(url) {
     return fetch(url).then(function (resp) {
-      if (!resp.ok) throw new Error("HTTP " + resp.status);
-      return resp.json();
+      if (!resp.ok) return { ok: false, error: "HTTP " + resp.status };
+      return resp.json().then(function (data) {
+        return { ok: true, data: data };
+      }).catch(function (e) {
+        return { ok: false, error: "response wasn't valid JSON (" + e.message + ")" };
+      });
     }).catch(function (err) {
+      var msg = (err && err.message) || String(err);
       console.warn("Injury data fetch failed for", url, err);
-      return null;
+      return { ok: false, error: msg };
     });
   }
 
@@ -679,22 +686,40 @@
     btn.disabled = true;
     status.textContent = "Fetching NFL team list from ESPN...";
     try {
-      var teamsData = await fetchJson("https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams?limit=40");
-      var teams = extractTeamList(teamsData);
-      if (!teams.length) throw new Error("couldn't read the team list from ESPN's response");
+      var teamsResult = await fetchJson("https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams?limit=40");
+      if (!teamsResult.ok) {
+        throw new Error("your browser blocked the request to ESPN (" + teamsResult.error +
+          ") — this is almost always a CORS restriction, not a bug here; ESPN's API may not allow " +
+          "requests from this page's origin (" + location.origin + (location.protocol === "file:" ? ", i.e. opening the file directly" : "") + ")");
+      }
+      console.log("[injury debug] teams list raw response:", teamsResult.data);
+      var teams = extractTeamList(teamsResult.data);
+      if (!teams.length) throw new Error("ESPN's team list came back but not in the shape we expected — see '[injury debug] teams list raw response' in the console");
 
       var allInjuries = [];
       var failures = 0;
       for (var i = 0; i < teams.length; i++) {
         var t = teams[i];
         status.textContent = "Fetching injuries " + (i + 1) + "/" + teams.length + " (" + (t.abbreviation || t.id) + ")...";
-        var detail = await fetchJson("https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/" + t.id + "?enable=injuries");
-        if (!detail) { failures++; continue; }
-        allInjuries = allInjuries.concat(extractInjuriesFromTeam(detail, t.abbreviation));
+        var detailResult = await fetchJson("https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/" + t.id + "?enable=injuries");
+        if (!detailResult.ok) {
+          failures++;
+          if (i === 0) console.warn("[injury debug] first team fetch failed:", detailResult.error);
+          continue;
+        }
+        var detail = detailResult.data;
+        var extracted = extractInjuriesFromTeam(detail, t.abbreviation);
+        if (i === 0) {
+          console.log("[injury debug] raw response for", t.abbreviation, detail);
+          console.log("[injury debug] extracted from it:", extracted);
+        }
+        allInjuries = allInjuries.concat(extracted);
         await sleep(120);
       }
 
+      console.log("[injury debug] total injuries found across all teams:", allInjuries.length, allInjuries.slice(0, 10));
       var matched = mergeInjuries(allInjuries);
+      console.log("[injury debug] matched", matched, "of", state.rankings.length, "rankings");
       state.injuriesFetchedAt = new Date().toISOString();
       save();
       renderRankingsPreview();
@@ -704,8 +729,7 @@
         " of your " + state.rankings.length + " players. Last updated " + new Date(state.injuriesFetchedAt).toLocaleString() + ".";
       toast("Injury data updated: " + matched + " players matched.");
     } catch (err) {
-      status.textContent = "Couldn't fetch injury data (" + (err && err.message ? err.message : err) +
-        "). Your browser or network may be blocking requests to ESPN — check the console and try again.";
+      status.textContent = "Couldn't fetch injury data: " + (err && err.message ? err.message : err) + ".";
       toast("Injury fetch failed.");
     } finally {
       btn.disabled = false;
