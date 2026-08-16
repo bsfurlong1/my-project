@@ -258,6 +258,7 @@
       <button class="btn secondary btn-sm" id="applyTeamCount">Apply team count</button>
 
       <h3>Team names</h3>
+      <div class="hint" style="margin-bottom:6px;">Numbering is the draft order (slot 1 picks first). Use ▲/▼ to reorder — already-drafted picks move with their team, only the draft slot changes.</div>
       <div id="teamNamesList" class="field"></div>
 
       <h3>Roster slots (per team)</h3>
@@ -794,14 +795,27 @@
     namesList.innerHTML = "";
     state.teamNames.forEach(function (name, i) {
       var wrap = document.createElement("div");
-      wrap.style.display = "flex"; wrap.style.gap = "6px"; wrap.style.marginBottom = "6px";
+      wrap.style.display = "flex"; wrap.style.gap = "6px"; wrap.style.marginBottom = "6px"; wrap.style.alignItems = "center";
+      var order = document.createElement("span");
+      order.className = "muted small"; order.style.width = "18px"; order.style.flexShrink = "0";
+      order.textContent = (i + 1) + ".";
       var input = document.createElement("input");
       input.type = "text"; input.value = name; input.style.flex = "1";
       input.addEventListener("change", function () {
         state.teamNames[i] = input.value.trim() || ("Team " + (i + 1));
         save(); renderAllTeamSelectors();
       });
-      wrap.appendChild(input);
+      var upBtn = document.createElement("button");
+      upBtn.className = "btn secondary btn-sm"; upBtn.type = "button"; upBtn.textContent = "▲";
+      upBtn.title = "Move up in draft order";
+      upBtn.disabled = i === 0;
+      upBtn.addEventListener("click", function () { moveTeam(i, -1); });
+      var downBtn = document.createElement("button");
+      downBtn.className = "btn secondary btn-sm"; downBtn.type = "button"; downBtn.textContent = "▼";
+      downBtn.title = "Move down in draft order";
+      downBtn.disabled = i === state.teamNames.length - 1;
+      downBtn.addEventListener("click", function () { moveTeam(i, 1); });
+      wrap.appendChild(order); wrap.appendChild(input); wrap.appendChild(upBtn); wrap.appendChild(downBtn);
       namesList.appendChild(wrap);
     });
 
@@ -1223,6 +1237,28 @@
     for (var i = 0; i < n; i++) names.push(existing[i] || ("Team " + (i + 1)));
     state.teamNames = names;
     if (state.yourTeamIndex >= n) state.yourTeamIndex = 0;
+    save();
+    renderSetupInputs();
+    renderAllTeamSelectors();
+    renderDraft();
+    renderTeams();
+    renderGrades();
+  }
+
+  // Swaps two adjacent draft slots. Already-drafted picks are remapped along with the
+  // swap so a team keeps its own picks — only the slot (and therefore turn order) moves.
+  function moveTeam(i, dir) {
+    var j = i + dir;
+    if (j < 0 || j >= state.teamNames.length) return;
+    var tmp = state.teamNames[i];
+    state.teamNames[i] = state.teamNames[j];
+    state.teamNames[j] = tmp;
+    state.picks.forEach(function (p) {
+      if (p.teamIndex === i) p.teamIndex = j;
+      else if (p.teamIndex === j) p.teamIndex = i;
+    });
+    if (state.yourTeamIndex === i) state.yourTeamIndex = j;
+    else if (state.yourTeamIndex === j) state.yourTeamIndex = i;
     save();
     renderSetupInputs();
     renderAllTeamSelectors();
