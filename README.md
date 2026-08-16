@@ -80,6 +80,33 @@ local storage as you go.
 Roster slot assignment is automatic: a pick fills the matching starter slot
 if open, else FLEX (for RB/WR/TE) if open, else bench.
 
+#### Voice mode
+
+Click **🎤 Voice** next to the search box and speak a command (requires a
+browser with Web Speech API support, e.g. Chrome or Edge; the button is
+disabled otherwise):
+
+- **"draft `<player>`"** (or "pick"/"take") — finds the best-matching
+  undrafted player by name and drafts them for whichever team is currently
+  on the clock (or the team selected in the "Drafting for" override).
+- **"draft `<player>` for `<team>`"**, or **"`<team>` drafts `<player>`"** —
+  drafts a player for a specific team by name, "team `<N>`", "me"/"my
+  team" (your configured team), regardless of whose turn it is — handy for
+  entering picks out of order or catching up.
+- **"switch to `<team>`"** (or "drafting for"/"now drafting for") — sets
+  the "Drafting for" override so subsequent picks (voice or button) go to
+  that team until you switch again.
+- **"search `<player>`"** (or "find"/"show") — filters the best-available
+  list, same as typing in the search box.
+- **"position `<POS>`"** (or "pos"/"filter") — sets the position filter
+  (QB, RB, WR, TE, DST, K, or ALL).
+- **"clear search"** — clears the search box.
+- Anything else is treated as a search query.
+
+Name matching is fuzzy (exact match, then substring, then per-word prefix
+match) so close pronunciations of a player's or team's name still resolve,
+and only undrafted players are considered.
+
 ### Teams & Needs tab
 
 One card per team showing every roster slot, filled player or "OPEN".
