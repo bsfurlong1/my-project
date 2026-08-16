@@ -1,0 +1,1018 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fantasy Draft Day Analyzer</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --border: #dde1e6;
+    --text: #1c2128;
+    --muted: #667085;
+    --accent: #2f6fed;
+    --accent-fg: #ffffff;
+    --good: #1a7f37;
+    --good-bg: #e6f6ea;
+    --bad: #b42318;
+    --bad-bg: #fdecea;
+    --warn-bg: #fff6e5;
+    --row-hover: #f0f4ff;
+    --slot-open: #fff3f0;
+    --slot-filled: #eef7ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --panel: #1c1f26;
+      --border: #2c313a;
+      --text: #e6e8eb;
+      --muted: #9aa4b2;
+      --accent: #5b8def;
+      --accent-fg: #0b1020;
+      --good: #4cc26a;
+      --good-bg: #123420;
+      --bad: #ff6b5e;
+      --bad-bg: #3a1414;
+      --warn-bg: #332a10;
+      --row-hover: #232833;
+      --slot-open: #3a2420;
+      --slot-filled: #1c2e1f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header h1 { margin: 0 0 2px; font-size: 18px; }
+  header p { margin: 0; color: var(--muted); font-size: 12.5px; }
+
+  nav.tabs {
+    display: flex;
+    gap: 4px;
+    padding: 8px 20px 0;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  nav.tabs button {
+    background: none;
+    border: 1px solid transparent;
+    border-bottom: none;
+    padding: 8px 14px;
+    font-size: 13.5px;
+    color: var(--muted);
+    cursor: pointer;
+    border-radius: 6px 6px 0 0;
+  }
+  nav.tabs button.active {
+    color: var(--text);
+    font-weight: 600;
+    background: var(--bg);
+    border-color: var(--border);
+  }
+
+  main { padding: 18px 20px 60px; max-width: 1300px; margin: 0 auto; }
+  .tabpanel { display: none; }
+  .tabpanel.active { display: block; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .panel h2 { margin: 0 0 10px; font-size: 15px; }
+  .panel h3 { margin: 14px 0 8px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 880px) {
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  }
+
+  label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+  input[type=text], input[type=number], textarea, select {
+    width: 100%;
+    padding: 7px 9px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13.5px;
+    font-family: inherit;
+  }
+  textarea { resize: vertical; min-height: 110px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .field { margin-bottom: 10px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+  .row > * { flex: 1; min-width: 120px; }
+
+  button.btn {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border: none;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.btn.secondary {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  button.btn.danger { background: var(--bad); color: #fff; }
+  button.btn:disabled { opacity: .45; cursor: not-allowed; }
+  button.btn-sm { padding: 4px 9px; font-size: 12px; border-radius: 5px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .03em; }
+  tbody tr:hover { background: var(--row-hover); }
+  .table-scroll { max-height: 480px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .table-scroll table { margin: 0; }
+  .table-scroll thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+
+  .pos-pill {
+    display: inline-block;
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+  .pos-QB { color: #a23bd8; }
+  .pos-RB { color: #1a9e5c; }
+  .pos-WR { color: #2f6fed; }
+  .pos-TE { color: #e08a1e; }
+  .pos-DST { color: #667085; }
+  .pos-K { color: #b42318; }
+
+  .clock-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: linear-gradient(135deg, var(--accent), #7a4ff0);
+    color: #fff;
+    padding: 14px 18px;
+    border-radius: 10px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .clock-banner .who { font-size: 17px; font-weight: 700; }
+  .clock-banner .meta { font-size: 12.5px; opacity: .9; }
+
+  .filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .filters button {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 5px 11px;
+    border-radius: 999px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .filters button.active { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+
+  .needs-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+  .team-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--bg); }
+  .team-card h4 { margin: 0 0 8px; font-size: 13.5px; display: flex; justify-content: space-between; }
+  .slot-row { display: flex; justify-content: space-between; font-size: 12.5px; padding: 3px 0; border-bottom: 1px dashed var(--border); }
+  .slot-row:last-child { border-bottom: none; }
+  .slot-row .slot-name { color: var(--muted); width: 60px; flex-shrink: 0; }
+  .slot-row.open { background: var(--slot-open); }
+  .slot-row.filled { background: var(--slot-filled); }
+
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+  .badge.good { background: var(--good-bg); color: var(--good); }
+  .badge.bad { background: var(--bad-bg); color: var(--bad); }
+  .badge.neutral { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
+
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .toast {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 8px;
+    font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .2s;
+    z-index: 50;
+  }
+  .toast.show { opacity: 1; }
+  .file-btn { display: inline-block; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🏈 Fantasy Draft Day Analyzer</h1>
+  <p>Track picks live, find the best player available, watch each team's roster needs, and grade the draft as it happens.</p>
+</header>
+
+<nav class="tabs">
+  <button data-tab="setup" class="active">Setup</button>
+  <button data-tab="draft">Draft</button>
+  <button data-tab="teams">Teams &amp; Needs</button>
+  <button data-tab="grades">Grades</button>
+</nav>
+
+<main>
+
+  <!-- SETUP TAB -->
+  <section class="tabpanel active" id="tab-setup">
+    <div class="panel">
+      <h2>League setup</h2>
+      <div class="row">
+        <div class="field">
+          <label for="numTeams">Number of teams</label>
+          <input type="number" id="numTeams" min="2" max="20" value="10">
+        </div>
+        <div class="field">
+          <label for="draftType">Draft order</label>
+          <select id="draftType">
+            <option value="snake">Snake (1-2-3...N, N...3-2-1, repeat)</option>
+            <option value="linear">Linear (1-2-3...N every round)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="yourTeam">Your team</label>
+          <select id="yourTeam"></select>
+        </div>
+      </div>
+      <button class="btn secondary btn-sm" id="applyTeamCount">Apply team count</button>
+
+      <h3>Team names</h3>
+      <div id="teamNamesList" class="field"></div>
+
+      <h3>Roster slots (per team)</h3>
+      <div class="row" id="rosterSlotInputs"></div>
+      <div class="hint">FLEX accepts RB, WR, or TE. BENCH accepts any position (overflow beyond bench size is still tracked, just flagged).</div>
+
+      <div style="margin-top:14px; display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn" id="saveSetupBtn">Save setup</button>
+        <button class="btn danger" id="resetDraftBtn">Reset draft (clear all picks)</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Player rankings</h2>
+      <p class="small muted">Import your own rankings/ADP as CSV (columns: <code>rank,name,position,team,bye</code> — header row optional, <code>team</code> and <code>bye</code> optional). Or load placeholder sample data to try the app out.</p>
+      <div class="grid-2">
+        <div>
+          <label for="csvInput">Paste CSV</label>
+          <textarea id="csvInput" placeholder="rank,name,position,team,bye
+1,Sample Player A,RB,SAMP,7
+2,Sample Player B,WR,SAMP,9
+..."></textarea>
+          <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-sm" id="importCsvBtn">Import CSV</button>
+            <label class="btn secondary btn-sm file-btn">Upload CSV file
+              <input type="file" id="csvFile" accept=".csv,text/csv" style="display:none">
+            </label>
+            <button class="btn secondary btn-sm" id="loadSampleBtn">Load sample data</button>
+            <button class="btn danger btn-sm" id="clearRankingsBtn">Clear rankings</button>
+          </div>
+          <div class="hint" id="csvStatus"></div>
+        </div>
+        <div>
+          <label>Current rankings (<span id="rankingsCount">0</span> players)</label>
+          <div class="table-scroll" style="max-height:260px;">
+            <table>
+              <thead><tr><th>#</th><th>Name</th><th>Pos</th><th>Team</th></tr></thead>
+              <tbody id="rankingsPreview"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DRAFT TAB -->
+  <section class="tabpanel" id="tab-draft">
+    <div class="clock-banner">
+      <div>
+        <div class="who" id="onClockWho">Add teams and rankings to start drafting</div>
+        <div class="meta" id="onClockMeta"></div>
+      </div>
+      <div class="row" style="max-width:260px; margin:0;">
+        <div class="field" style="margin:0;">
+          <label style="color:#fff; opacity:.85;">Drafting for (override, e.g. trades)</label>
+          <select id="draftingForOverride"></select>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-3">
+      <div class="panel">
+        <h2>Best available</h2>
+        <div class="filters" id="posFilters"></div>
+        <input type="text" id="searchBox" placeholder="Search player name...">
+        <div class="table-scroll" style="margin-top:10px;">
+          <table>
+            <thead><tr><th>Rk</th><th>Player</th><th>Pos</th><th>Team</th><th></th></tr></thead>
+            <tbody id="bestAvailableBody"></tbody>
+          </table>
+        </div>
+
+        <h3>Manual pick (player not in rankings)</h3>
+        <div class="row">
+          <input type="text" id="manualName" placeholder="Player name">
+          <select id="manualPos">
+            <option>QB</option><option>RB</option><option>WR</option><option>TE</option><option>DST</option><option>K</option>
+          </select>
+          <input type="text" id="manualTeam" placeholder="NFL team (optional)" style="max-width:140px;">
+          <button class="btn btn-sm" id="manualDraftBtn">Draft this player</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Draft log</h2>
+        <button class="btn secondary btn-sm" id="undoBtn">Undo last pick</button>
+        <button class="btn secondary btn-sm" id="exportCsvBtn">Export CSV</button>
+        <div class="table-scroll" style="margin-top:10px; max-height:520px;">
+          <table>
+            <thead><tr><th>#</th><th>Team</th><th>Player</th></tr></thead>
+            <tbody id="draftLogBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TEAMS TAB -->
+  <section class="tabpanel" id="tab-teams">
+    <div class="panel">
+      <h2>Teams &amp; roster needs</h2>
+      <p class="small muted">Open slots are highlighted. FLEX can be filled by RB/WR/TE; BENCH accepts any position.</p>
+      <div class="needs-grid" id="teamsGrid"></div>
+    </div>
+  </section>
+
+  <!-- GRADES TAB -->
+  <section class="tabpanel" id="tab-grades">
+    <div class="panel">
+      <h2>Draft grades</h2>
+      <p class="small muted">
+        Value = (pick number) − (player's rank at draft time). A positive value means the team got a player
+        who was ranked better than where they picked (a steal); negative means they picked a player ranked
+        worse than the slot (a reach). Grades are relative to the other teams in <em>this</em> draft, based
+        on average pick value. Manual/unranked picks aren't counted toward value.
+      </p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Team</th><th>Picks</th><th>Avg value</th><th>Grade</th><th>Best pick</th><th>Worst pick</th></tr></thead>
+          <tbody id="gradesBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var STORAGE_KEY = "fantasyDraftAnalyzer.v1";
+  var ROSTER_ORDER = ["QB", "RB", "WR", "TE", "FLEX", "DST", "K", "BENCH"];
+  var FLEX_ELIGIBLE = ["RB", "WR", "TE"];
+  var STARTER_POSITIONS = ["QB", "RB", "WR", "TE", "DST", "K"];
+
+  var DEFAULT_ROSTER = { QB: 1, RB: 2, WR: 2, TE: 1, FLEX: 1, DST: 1, K: 1, BENCH: 6 };
+
+  var state = {
+    numTeams: 10,
+    draftType: "snake",
+    yourTeamIndex: 0,
+    teamNames: [],
+    rosterSlots: Object.assign({}, DEFAULT_ROSTER),
+    rankings: [],   // {rank, name, pos, team, bye}
+    picks: [],      // {pickNumber, teamIndex, name, pos, team, rank, manual}
+    posFilter: "ALL",
+    search: ""
+  };
+
+  function defaultTeamNames(n) {
+    var names = [];
+    for (var i = 0; i < n; i++) names.push("Team " + (i + 1));
+    return names;
+  }
+
+  function load() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      var saved = JSON.parse(raw);
+      Object.assign(state, saved);
+    } catch (e) { /* ignore corrupt storage */ }
+  }
+
+  function save() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+
+  function toast(msg) {
+    var el = document.getElementById("toast");
+    el.textContent = msg;
+    el.classList.add("show");
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { el.classList.remove("show"); }, 1800);
+  }
+
+  // ---------- CSV parsing ----------
+  function parseCsvLine(line) {
+    var out = [];
+    var cur = "";
+    var inQuotes = false;
+    for (var i = 0; i < line.length; i++) {
+      var c = line[i];
+      if (inQuotes) {
+        if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+        else if (c === '"') { inQuotes = false; }
+        else { cur += c; }
+      } else {
+        if (c === '"') inQuotes = true;
+        else if (c === ',') { out.push(cur); cur = ""; }
+        else cur += c;
+      }
+    }
+    out.push(cur);
+    return out.map(function (s) { return s.trim(); });
+  }
+
+  function normalizePos(p) {
+    p = (p || "").toUpperCase().trim();
+    if (p === "DEF" || p === "D/ST" || p === "DEFENSE") return "DST";
+    if (p === "PK") return "K";
+    return p;
+  }
+
+  function parseCsv(text) {
+    var lines = text.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) { return l.length; });
+    if (!lines.length) return { players: [], errors: ["No data found."] };
+
+    var first = parseCsvLine(lines[0]).map(function (s) { return s.toLowerCase(); });
+    var hasHeader = first.indexOf("name") !== -1 || first.indexOf("rank") !== -1 || first.indexOf("position") !== -1 || first.indexOf("pos") !== -1;
+
+    var colIdx = { rank: 0, name: 1, pos: 2, team: 3, bye: 4 };
+    var start = 0;
+    if (hasHeader) {
+      start = 1;
+      colIdx = {};
+      first.forEach(function (h, i) {
+        if (h === "rank" || h === "rk" || h === "overall") colIdx.rank = i;
+        else if (h === "name" || h === "player") colIdx.name = i;
+        else if (h === "position" || h === "pos") colIdx.pos = i;
+        else if (h === "team" || h === "nfl team" || h === "tm") colIdx.team = i;
+        else if (h === "bye" || h === "bye week") colIdx.bye = i;
+      });
+    }
+
+    var players = [];
+    var errors = [];
+    for (var i = start; i < lines.length; i++) {
+      var cols = parseCsvLine(lines[i]);
+      if (!cols.length || !cols.join("")) continue;
+      var name = colIdx.name !== undefined ? cols[colIdx.name] : cols[1];
+      if (!name) { errors.push("Line " + (i + 1) + ": missing name, skipped."); continue; }
+      var rankRaw = colIdx.rank !== undefined ? cols[colIdx.rank] : cols[0];
+      var rank = parseInt(rankRaw, 10);
+      players.push({
+        rank: isNaN(rank) ? (players.length + 1) : rank,
+        name: name,
+        pos: normalizePos(colIdx.pos !== undefined ? cols[colIdx.pos] : cols[2]),
+        team: (colIdx.team !== undefined ? cols[colIdx.team] : (cols[3] || "")) || "",
+        bye: (colIdx.bye !== undefined ? cols[colIdx.bye] : (cols[4] || "")) || ""
+      });
+    }
+    players.sort(function (a, b) { return a.rank - b.rank; });
+    return { players: players, errors: errors };
+  }
+
+  function sampleCsv() {
+    var positions = ["RB", "WR", "RB", "WR", "QB", "TE", "RB", "WR", "WR", "RB",
+      "QB", "TE", "WR", "RB", "WR", "QB", "RB", "TE", "WR", "RB",
+      "DST", "K", "WR", "RB", "QB", "TE", "WR", "RB", "DST", "K"];
+    var lines = ["rank,name,position,team,bye"];
+    positions.forEach(function (pos, i) {
+      lines.push((i + 1) + ",Sample " + pos + " " + (i + 1) + "," + pos + ",SMP," + (1 + (i % 14)));
+    });
+    return lines.join("\n");
+  }
+
+  // ---------- Draft order ----------
+  function teamIndexForPick(pickNumber) {
+    var n = state.numTeams;
+    if (n <= 0) return 0;
+    var zeroBased = pickNumber - 1;
+    var round = Math.floor(zeroBased / n);
+    var posInRound = zeroBased % n;
+    if (state.draftType === "snake" && round % 2 === 1) {
+      return n - 1 - posInRound;
+    }
+    return posInRound;
+  }
+
+  function roundAndPickInRound(pickNumber) {
+    var n = state.numTeams;
+    var zeroBased = pickNumber - 1;
+    return { round: Math.floor(zeroBased / n) + 1, pickInRound: (zeroBased % n) + 1 };
+  }
+
+  // ---------- Roster slot assignment ----------
+  function emptyRosterCounts() {
+    var counts = {};
+    ROSTER_ORDER.forEach(function (slot) { counts[slot] = 0; });
+    return counts;
+  }
+
+  function teamRosters() {
+    var rosters = [];
+    for (var t = 0; t < state.numTeams; t++) {
+      rosters.push({ counts: emptyRosterCounts(), players: [] });
+    }
+    state.picks.forEach(function (pick) {
+      var r = rosters[pick.teamIndex];
+      if (!r) return;
+      var slot = assignSlotForPick(r.counts, pick.pos);
+      r.counts[slot] = (r.counts[slot] || 0) + 1;
+      r.players.push(Object.assign({ slot: slot }, pick));
+    });
+    return rosters;
+  }
+
+  function assignSlotForPick(counts, pos) {
+    var slots = state.rosterSlots;
+    if (STARTER_POSITIONS.indexOf(pos) !== -1 && counts[pos] < (slots[pos] || 0)) {
+      return pos;
+    }
+    if (FLEX_ELIGIBLE.indexOf(pos) !== -1 && counts.FLEX < (slots.FLEX || 0)) {
+      return "FLEX";
+    }
+    return "BENCH"; // overflow allowed past configured bench size, still tracked
+  }
+
+  // ---------- Rendering ----------
+  function el(id) { return document.getElementById(id); }
+
+  function renderTabs() {
+    document.querySelectorAll("nav.tabs button").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        document.querySelectorAll("nav.tabs button").forEach(function (b) { b.classList.remove("active"); });
+        document.querySelectorAll(".tabpanel").forEach(function (p) { p.classList.remove("active"); });
+        btn.classList.add("active");
+        el("tab-" + btn.dataset.tab).classList.add("active");
+        if (btn.dataset.tab === "teams") renderTeams();
+        if (btn.dataset.tab === "grades") renderGrades();
+        if (btn.dataset.tab === "draft") renderDraft();
+      });
+    });
+  }
+
+  function renderSetupInputs() {
+    el("numTeams").value = state.numTeams;
+    el("draftType").value = state.draftType;
+
+    var yourSel = el("yourTeam");
+    yourSel.innerHTML = "";
+    state.teamNames.forEach(function (name, i) {
+      var opt = document.createElement("option");
+      opt.value = i; opt.textContent = name;
+      if (i === state.yourTeamIndex) opt.selected = true;
+      yourSel.appendChild(opt);
+    });
+
+    var namesList = el("teamNamesList");
+    namesList.innerHTML = "";
+    state.teamNames.forEach(function (name, i) {
+      var wrap = document.createElement("div");
+      wrap.style.display = "flex"; wrap.style.gap = "6px"; wrap.style.marginBottom = "6px";
+      var input = document.createElement("input");
+      input.type = "text"; input.value = name; input.style.flex = "1";
+      input.addEventListener("change", function () {
+        state.teamNames[i] = input.value.trim() || ("Team " + (i + 1));
+        save(); renderAllTeamSelectors();
+      });
+      wrap.appendChild(input);
+      namesList.appendChild(wrap);
+    });
+
+    var rosterWrap = el("rosterSlotInputs");
+    rosterWrap.innerHTML = "";
+    ROSTER_ORDER.forEach(function (slot) {
+      var field = document.createElement("div");
+      field.className = "field";
+      var label = document.createElement("label");
+      label.textContent = slot;
+      var input = document.createElement("input");
+      input.type = "number"; input.min = "0"; input.max = "10";
+      input.value = state.rosterSlots[slot];
+      input.addEventListener("change", function () {
+        state.rosterSlots[slot] = Math.max(0, parseInt(input.value, 10) || 0);
+        save(); renderTeams(); renderGrades();
+      });
+      field.appendChild(label); field.appendChild(input);
+      rosterWrap.appendChild(field);
+    });
+  }
+
+  function renderAllTeamSelectors() {
+    var yourSel = el("yourTeam");
+    var cur = yourSel.value;
+    yourSel.innerHTML = "";
+    state.teamNames.forEach(function (name, i) {
+      var opt = document.createElement("option");
+      opt.value = i; opt.textContent = name;
+      yourSel.appendChild(opt);
+    });
+    yourSel.value = cur;
+
+    var override = el("draftingForOverride");
+    var curO = override.value;
+    override.innerHTML = "";
+    state.teamNames.forEach(function (name, i) {
+      var opt = document.createElement("option");
+      opt.value = i; opt.textContent = name;
+      override.appendChild(opt);
+    });
+    if (curO !== "") override.value = curO;
+  }
+
+  function renderRankingsPreview() {
+    el("rankingsCount").textContent = state.rankings.length;
+    var body = el("rankingsPreview");
+    body.innerHTML = "";
+    state.rankings.slice(0, 300).forEach(function (p) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = "<td>" + p.rank + "</td><td>" + escapeHtml(p.name) + "</td>" +
+        "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>";
+      body.appendChild(tr);
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s || "").replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function draftedNameSet() {
+    var s = new Set();
+    state.picks.forEach(function (p) { s.add(p.name.toLowerCase()); });
+    return s;
+  }
+
+  function renderPosFilters() {
+    var wrap = el("posFilters");
+    wrap.innerHTML = "";
+    ["ALL"].concat(STARTER_POSITIONS).forEach(function (pos) {
+      var btn = document.createElement("button");
+      btn.textContent = pos;
+      if (pos === state.posFilter) btn.classList.add("active");
+      btn.addEventListener("click", function () {
+        state.posFilter = pos;
+        renderDraft();
+      });
+      wrap.appendChild(btn);
+    });
+  }
+
+  function renderDraft() {
+    renderAllTeamSelectors();
+    renderPosFilters();
+
+    var totalPicks = state.picks.length;
+    var pickNumber = totalPicks + 1;
+    var onClockIdx = state.numTeams > 0 ? teamIndexForPick(pickNumber) : 0;
+    var rp = roundAndPickInRound(pickNumber);
+
+    if (state.numTeams > 0 && state.teamNames.length === state.numTeams) {
+      el("onClockWho").textContent = "On the clock: " + state.teamNames[onClockIdx] +
+        (onClockIdx === state.yourTeamIndex ? " (you)" : "");
+      el("onClockMeta").textContent = "Pick #" + pickNumber + " — Round " + rp.round + ", Pick " + rp.pickInRound + " of " + state.numTeams;
+      el("draftingForOverride").value = onClockIdx;
+    } else {
+      el("onClockWho").textContent = "Set up teams first";
+      el("onClockMeta").textContent = "";
+    }
+
+    var drafted = draftedNameSet();
+    var search = state.search.toLowerCase();
+    var body = el("bestAvailableBody");
+    body.innerHTML = "";
+    var shown = 0;
+    for (var i = 0; i < state.rankings.length && shown < 200; i++) {
+      var p = state.rankings[i];
+      if (drafted.has(p.name.toLowerCase())) continue;
+      if (state.posFilter !== "ALL" && p.pos !== state.posFilter) continue;
+      if (search && p.name.toLowerCase().indexOf(search) === -1) continue;
+      shown++;
+      var tr = document.createElement("tr");
+      var tdBtn = document.createElement("td");
+      var btn = document.createElement("button");
+      btn.className = "btn btn-sm"; btn.textContent = "Draft";
+      btn.disabled = state.numTeams <= 0;
+      (function (player) {
+        btn.addEventListener("click", function () { draftPlayer(player, false); });
+      })(p);
+      tdBtn.appendChild(btn);
+      tr.innerHTML = "<td>" + p.rank + "</td><td>" + escapeHtml(p.name) + "</td>" +
+        "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>";
+      tr.appendChild(tdBtn);
+      body.appendChild(tr);
+    }
+
+    var logBody = el("draftLogBody");
+    logBody.innerHTML = "";
+    for (var j = state.picks.length - 1; j >= 0; j--) {
+      var pick = state.picks[j];
+      var tr2 = document.createElement("tr");
+      tr2.innerHTML = "<td>" + pick.pickNumber + "</td><td>" + escapeHtml(state.teamNames[pick.teamIndex] || ("Team " + (pick.teamIndex + 1))) + "</td>" +
+        "<td>" + escapeHtml(pick.name) + " <span class='pos-pill pos-" + pick.pos + "'>" + pick.pos + "</span>" +
+        (pick.manual ? " <span class='badge neutral'>unranked</span>" : "") + "</td>";
+      logBody.appendChild(tr2);
+    }
+
+    el("undoBtn").disabled = state.picks.length === 0;
+  }
+
+  function draftPlayer(player, manual) {
+    if (state.numTeams <= 0) { toast("Set up teams first."); return; }
+    var pickNumber = state.picks.length + 1;
+    var overrideVal = el("draftingForOverride").value;
+    var teamIdx = overrideVal !== "" ? parseInt(overrideVal, 10) : teamIndexForPick(pickNumber);
+    state.picks.push({
+      pickNumber: pickNumber,
+      teamIndex: teamIdx,
+      name: player.name,
+      pos: player.pos,
+      team: player.team || "",
+      rank: manual ? null : player.rank,
+      manual: !!manual
+    });
+    save();
+    renderDraft();
+    renderTeams();
+    renderGrades();
+    toast("Drafted " + player.name);
+  }
+
+  function renderTeams() {
+    var rosters = teamRosters();
+    var grid = el("teamsGrid");
+    grid.innerHTML = "";
+    for (var t = 0; t < state.numTeams; t++) {
+      var card = document.createElement("div");
+      card.className = "team-card";
+      var name = state.teamNames[t] || ("Team " + (t + 1));
+      var isYou = t === state.yourTeamIndex;
+      var h4 = document.createElement("h4");
+      h4.innerHTML = escapeHtml(name) + (isYou ? " <span class='badge good'>you</span>" : "");
+      card.appendChild(h4);
+
+      var roster = rosters[t] || { counts: emptyRosterCounts(), players: [] };
+      var byPlayerForSlot = {};
+      roster.players.forEach(function (p) {
+        byPlayerForSlot[p.slot] = byPlayerForSlot[p.slot] || [];
+        byPlayerForSlot[p.slot].push(p);
+      });
+
+      ROSTER_ORDER.forEach(function (slot) {
+        var required = state.rosterSlots[slot] || 0;
+        var filled = byPlayerForSlot[slot] || [];
+        var displayCount = Math.max(required, filled.length);
+        for (var i = 0; i < displayCount; i++) {
+          var row = document.createElement("div");
+          var player = filled[i];
+          row.className = "slot-row " + (player ? "filled" : "open");
+          var label = i < required ? slot : slot + "*";
+          row.innerHTML = "<span class='slot-name'>" + label + "</span><span>" +
+            (player ? escapeHtml(player.name) : "<span class='muted'>OPEN</span>") + "</span>";
+          card.appendChild(row);
+        }
+      });
+      grid.appendChild(card);
+    }
+  }
+
+  function renderGrades() {
+    var rosters = teamRosters();
+    var rows = [];
+    for (var t = 0; t < state.numTeams; t++) {
+      var roster = rosters[t] || { players: [] };
+      var valued = roster.players.filter(function (p) { return typeof p.rank === "number"; });
+      var values = valued.map(function (p) { return p.pickNumber - p.rank; });
+      var avg = values.length ? values.reduce(function (a, b) { return a + b; }, 0) / values.length : null;
+      var best = null, worst = null;
+      valued.forEach(function (p) {
+        var v = p.pickNumber - p.rank;
+        if (!best || v > best.v) best = { v: v, name: p.name };
+        if (!worst || v < worst.v) worst = { v: v, name: p.name };
+      });
+      rows.push({
+        team: state.teamNames[t] || ("Team " + (t + 1)),
+        picks: roster.players.length,
+        avg: avg,
+        best: best, worst: worst
+      });
+    }
+
+    var ranked = rows.filter(function (r) { return r.avg !== null; }).slice().sort(function (a, b) { return b.avg - a.avg; });
+    var gradeMap = {};
+    ranked.forEach(function (r, i) {
+      var frac = ranked.length > 1 ? i / (ranked.length - 1) : 0;
+      var grade;
+      if (frac < 0.1) grade = "A+";
+      else if (frac < 0.25) grade = "A";
+      else if (frac < 0.4) grade = "B+";
+      else if (frac < 0.55) grade = "B";
+      else if (frac < 0.7) grade = "C+";
+      else if (frac < 0.85) grade = "C";
+      else grade = "D";
+      gradeMap[r.team] = grade;
+    });
+
+    var body = el("gradesBody");
+    body.innerHTML = "";
+    rows.forEach(function (r) {
+      var tr = document.createElement("tr");
+      var grade = gradeMap[r.team] || "—";
+      var gradeBadge = grade === "—" ? "<span class='badge neutral'>—</span>" :
+        "<span class='badge " + (grade[0] === "A" ? "good" : (grade[0] === "D" || grade[0] === "C" ? "bad" : "neutral")) + "'>" + grade + "</span>";
+      tr.innerHTML = "<td>" + escapeHtml(r.team) + "</td>" +
+        "<td>" + r.picks + "</td>" +
+        "<td>" + (r.avg === null ? "—" : r.avg.toFixed(1)) + "</td>" +
+        "<td>" + gradeBadge + "</td>" +
+        "<td>" + (r.best ? escapeHtml(r.best.name) + " (+" + r.best.v + ")" : "—") + "</td>" +
+        "<td>" + (r.worst ? escapeHtml(r.worst.name) + " (" + r.worst.v + ")" : "—") + "</td>";
+      body.appendChild(tr);
+    });
+  }
+
+  // ---------- Event wiring ----------
+  function applyTeamCount() {
+    var n = Math.max(2, Math.min(20, parseInt(el("numTeams").value, 10) || 2));
+    state.numTeams = n;
+    var existing = state.teamNames || [];
+    var names = [];
+    for (var i = 0; i < n; i++) names.push(existing[i] || ("Team " + (i + 1)));
+    state.teamNames = names;
+    if (state.yourTeamIndex >= n) state.yourTeamIndex = 0;
+    save();
+    renderSetupInputs();
+    renderAllTeamSelectors();
+    renderDraft();
+    renderTeams();
+    renderGrades();
+  }
+
+  function wireEvents() {
+    el("applyTeamCount").addEventListener("click", applyTeamCount);
+
+    el("draftType").addEventListener("change", function () {
+      state.draftType = el("draftType").value;
+      save(); renderDraft();
+    });
+
+    el("yourTeam").addEventListener("change", function () {
+      state.yourTeamIndex = parseInt(el("yourTeam").value, 10) || 0;
+      save(); renderTeams(); renderDraft();
+    });
+
+    el("saveSetupBtn").addEventListener("click", function () {
+      applyTeamCount();
+      toast("Setup saved.");
+    });
+
+    el("resetDraftBtn").addEventListener("click", function () {
+      if (!confirm("Clear all draft picks? This cannot be undone.")) return;
+      state.picks = [];
+      save();
+      renderDraft(); renderTeams(); renderGrades();
+      toast("Draft reset.");
+    });
+
+    el("importCsvBtn").addEventListener("click", function () {
+      var result = parseCsv(el("csvInput").value);
+      if (!result.players.length) {
+        el("csvStatus").textContent = "Nothing imported. " + (result.errors[0] || "Check the CSV format.");
+        return;
+      }
+      state.rankings = result.players;
+      save();
+      renderRankingsPreview();
+      renderDraft();
+      el("csvStatus").textContent = "Imported " + result.players.length + " players." +
+        (result.errors.length ? " (" + result.errors.length + " lines skipped)" : "");
+    });
+
+    el("csvFile").addEventListener("change", function (e) {
+      var file = e.target.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        el("csvInput").value = reader.result;
+        el("importCsvBtn").click();
+      };
+      reader.readAsText(file);
+    });
+
+    el("loadSampleBtn").addEventListener("click", function () {
+      el("csvInput").value = sampleCsv();
+      el("importCsvBtn").click();
+      toast("Sample data loaded — replace with your real rankings before drafting for real.");
+    });
+
+    el("clearRankingsBtn").addEventListener("click", function () {
+      if (!confirm("Clear all rankings?")) return;
+      state.rankings = [];
+      save();
+      renderRankingsPreview();
+      renderDraft();
+    });
+
+    el("searchBox").addEventListener("input", function () {
+      state.search = el("searchBox").value;
+      renderDraft();
+    });
+
+    el("manualDraftBtn").addEventListener("click", function () {
+      var name = el("manualName").value.trim();
+      if (!name) { toast("Enter a player name."); return; }
+      draftPlayer({
+        name: name,
+        pos: el("manualPos").value,
+        team: el("manualTeam").value.trim()
+      }, true);
+      el("manualName").value = "";
+      el("manualTeam").value = "";
+    });
+
+    el("undoBtn").addEventListener("click", function () {
+      state.picks.pop();
+      save();
+      renderDraft(); renderTeams(); renderGrades();
+    });
+
+    el("exportCsvBtn").addEventListener("click", function () {
+      var lines = ["pick,round,team,player,position,nfl_team,rank_at_pick,manual"];
+      state.picks.forEach(function (p) {
+        var rp = roundAndPickInRound(p.pickNumber);
+        lines.push([p.pickNumber, rp.round, csvSafe(state.teamNames[p.teamIndex]), csvSafe(p.name),
+          p.pos, csvSafe(p.team), p.rank === null ? "" : p.rank, p.manual ? "yes" : "no"].join(","));
+      });
+      downloadFile("draft-log.csv", lines.join("\n"), "text/csv");
+    });
+  }
+
+  function csvSafe(s) {
+    s = String(s || "");
+    if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  }
+
+  function downloadFile(filename, content, mime) {
+    var blob = new Blob([content], { type: mime });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // ---------- Init ----------
+  function init() {
+    load();
+    if (!state.teamNames || !state.teamNames.length) {
+      state.teamNames = defaultTeamNames(state.numTeams);
+    }
+    renderTabs();
+    renderSetupInputs();
+    renderAllTeamSelectors();
+    renderRankingsPreview();
+    renderDraft();
+    renderTeams();
+    renderGrades();
+    wireEvents();
+  }
+
+  document.addEventListener("DOMContentLoaded", init);
+})();
+</script>
+</body>
+</html>
