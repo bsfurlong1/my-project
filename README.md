@@ -48,8 +48,9 @@ A separate, standalone tool for draft day itself — [`index.html`](index.html).
 It's a single self-contained web app (no server, no build step, no account):
 open it in any browser to track live draft picks, see the best player
 available from your imported rankings, watch each team's roster needs fill
-in, and get a running draft grade. Everything is saved to your browser's
-local storage as you go.
+in, get a running draft grade, and — once you import projected points —
+see best-by-position tiers and NFL team depth charts. Everything is saved
+to your browser's local storage as you go.
 
 ### Setup tab
 
@@ -118,6 +119,30 @@ disabled otherwise):
 Name matching is fuzzy (exact match, then substring, then per-word prefix
 match) so close pronunciations of a player's or team's name still resolve,
 and only undrafted players are considered.
+
+### Analysis tab
+
+Needs projected points imported first (Setup tab → **Projected points**): paste or upload a CSV
+with columns `name,position,team,points` (header row optional; position/team optional but help
+disambiguate players who share a last name). Matching against your rankings is by name — exact
+match first, then last name + first-initial (so sources that only show initials, e.g. "B.
+Robinson", still resolve), with team breaking ties between same-surname players. Team defenses
+match by team + position instead of name, since defense naming varies wildly between sources
+("Broncos" vs "Denver Defense"). Genuinely ambiguous matches (e.g. two same-team players sharing
+initials, like Bijan Robinson and Brian Robinson both on Atlanta) are flagged in the import status
+so you can double-check them rather than being silently guessed. Re-importing replaces all
+previously matched points.
+
+- **Best players & tiers by position**: filter by position, see every player with matched
+  projected points ranked highest to lowest, grouped into tiers. Tier breaks are placed
+  automatically at the largest point-gaps within a position (a gap bigger than the position's
+  typical gap by more than one standard deviation starts a new tier), so each tier is a cluster of
+  roughly interchangeable players. Already-drafted players are dimmed and marked.
+- **NFL team depth charts**: every player with both a team and projected points, grouped by NFL
+  team and ranked within each position by projection (QB, RB1/RB2/..., WR1/WR2/..., etc.) — useful
+  for spotting a backup worth handcuffing or a crowded timeshare to avoid.
+
+The Setup and Draft tables also show a Pts column once projected points are imported.
 
 ### Teams & Needs tab
 
