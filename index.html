@@ -205,6 +205,16 @@
   .badge.warn { background: var(--warn-bg); color: #9a6700; }
   .badge.neutral { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
 
+  .tier-header td {
+    background: var(--bg);
+    font-weight: 700;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--muted);
+    padding-top: 10px;
+  }
+
   .muted { color: var(--muted); }
   .small { font-size: 12px; }
   .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
@@ -230,6 +240,7 @@
   <button data-tab="draft">Draft</button>
   <button data-tab="teams">Teams &amp; Needs</button>
   <button data-tab="grades">Grades</button>
+  <button data-tab="analysis">Analysis</button>
 </nav>
 
 <main>
@@ -299,10 +310,42 @@
           <label>Current rankings (<span id="rankingsCount">0</span> players)</label>
           <div class="table-scroll" style="max-height:260px;">
             <table>
-              <thead><tr><th>#</th><th>Name</th><th>Pos</th><th>Team</th><th>Bye</th><th>Inj</th></tr></thead>
+              <thead><tr><th>#</th><th>Name</th><th>Pos</th><th>Team</th><th>Bye</th><th>Pts</th><th>Inj</th></tr></thead>
               <tbody id="rankingsPreview"></tbody>
             </table>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Projected points</h2>
+      <p class="small muted">Import per-player projected points as CSV (columns: <code>name,position,team,points</code> —
+        header row optional; <code>position</code>/<code>team</code> are optional but help disambiguate players who
+        share a last name). Matched to your rankings above by name — exact match first, then last name + first-initial
+        (handles sources that only show initials, e.g. "B. Robinson"), with team used to break ties. Team defenses match
+        by team + position instead of name. Re-importing replaces all previously matched points.</p>
+      <div class="grid-2">
+        <div>
+          <label for="projPtsInput">Paste CSV</label>
+          <textarea id="projPtsInput" placeholder="name,position,team,points
+Josh Allen,QB,BUF,337.44
+Bijan Robinson,RB,ATL,330.98
+..."></textarea>
+          <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-sm" id="importProjPtsBtn">Import projected points</button>
+            <label class="btn secondary btn-sm file-btn">Upload CSV file
+              <input type="file" id="projPtsFile" accept=".csv,text/csv" style="display:none">
+            </label>
+            <button class="btn danger btn-sm" id="clearProjPtsBtn">Clear projected points</button>
+          </div>
+          <div class="hint" id="projPtsStatus"></div>
+        </div>
+        <div>
+          <label>What this unlocks</label>
+          <p class="small muted">Once players have matched projected points, the <strong>Analysis</strong> tab shows
+            best players &amp; tiers per position and an NFL-team depth chart ranked by projection. The Draft and
+            Setup tables also show a Pts column.</p>
         </div>
       </div>
     </div>
@@ -334,7 +377,7 @@
         <div class="hint" id="voiceStatus"></div>
         <div class="table-scroll" style="margin-top:10px;">
           <table>
-            <thead><tr><th>Rk</th><th>Player</th><th>Pos</th><th>Team</th><th>Bye</th><th>Inj</th><th></th></tr></thead>
+            <thead><tr><th>Rk</th><th>Player</th><th>Pos</th><th>Team</th><th>Bye</th><th>Pts</th><th>Inj</th><th></th></tr></thead>
             <tbody id="bestAvailableBody"></tbody>
           </table>
         </div>
@@ -404,6 +447,31 @@
     </div>
   </section>
 
+  <!-- ANALYSIS TAB -->
+  <section class="tabpanel" id="tab-analysis">
+    <div class="panel">
+      <h2>Best players &amp; tiers by position</h2>
+      <p class="small muted">Ranked by projected points (Setup tab &rarr; Projected points). Tier breaks are placed
+        automatically at the largest point-gaps within a position, so each tier is a group of players with roughly
+        interchangeable value.</p>
+      <div class="filters" id="analysisPosFilters"></div>
+      <div class="table-scroll" style="max-height:600px;">
+        <table>
+          <thead><tr><th>Tier</th><th>Player</th><th>Team</th><th>Bye</th><th>Proj Pts</th><th>Status</th></tr></thead>
+          <tbody id="tiersBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>NFL team depth charts</h2>
+      <p class="small muted">Every player with a team and projected points, grouped by NFL team and ranked within
+        each position by projection (e.g. RB1, RB2, ...). Useful for spotting backups worth handcuffing or crowded
+        timeshares to avoid.</p>
+      <div class="needs-grid" id="depthChartGrid"></div>
+    </div>
+  </section>
+
 </main>
 
 <div class="toast" id="toast"></div>
@@ -425,11 +493,12 @@
     yourTeamIndex: 0,
     teamNames: [],
     rosterSlots: Object.assign({}, DEFAULT_ROSTER),
-    rankings: [],   // {rank, name, pos, team, bye, injury?: {status, detail}}
+    rankings: [],   // {rank, name, pos, team, bye, injury?: {status, detail}, projPts?: number}
     picks: [],      // {pickNumber, teamIndex, name, pos, team, rank, manual}
     posFilter: "ALL",
     search: "",
-    injuriesFetchedAt: null
+    injuriesFetchedAt: null,
+    analysisPosFilter: "RB"
   };
 
   function defaultTeamNames(n) {
@@ -552,6 +621,137 @@
       lines.push((i + 1) + ",Sample " + pos + " " + (i + 1) + "," + pos + ",SMP," + (1 + (i % 14)));
     });
     return lines.join("\n");
+  }
+
+  // ---------- Projected points CSV ----------
+  function parseProjPtsCsv(text) {
+    var lines = text.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) { return l.length; });
+    if (!lines.length) return { entries: [], errors: ["No data found."] };
+
+    var first = parseCsvLine(lines[0]).map(function (s) { return s.toLowerCase(); });
+    var hasHeader = first.indexOf("name") !== -1 || first.indexOf("player") !== -1 ||
+      first.indexOf("points") !== -1 || first.indexOf("pts") !== -1 || first.indexOf("position") !== -1;
+
+    var colIdx = { name: 0, pos: 1, team: 2, pts: 3 };
+    var start = 0;
+    if (hasHeader) {
+      start = 1;
+      var headerMap = {};
+      first.forEach(function (h, i) { if (!(h in headerMap)) headerMap[h] = i; });
+      var pick = function () {
+        for (var a = 0; a < arguments.length; a++) {
+          if (arguments[a] in headerMap) return headerMap[arguments[a]];
+        }
+        return undefined;
+      };
+      colIdx = {
+        name: pick("name", "player"),
+        pos: pick("position", "pos"),
+        team: pick("team", "nfl team", "tm"),
+        pts: pick("points", "pts", "proj pts", "proj_pts", "projpts", "projected points", "fpts", "projection")
+      };
+    }
+
+    var entries = [];
+    var errors = [];
+    for (var i = start; i < lines.length; i++) {
+      var cols = parseCsvLine(lines[i]);
+      if (!cols.length || !cols.join("")) continue;
+      var name = colIdx.name !== undefined ? cols[colIdx.name] : cols[0];
+      if (!name) { errors.push("Line " + (i + 1) + ": missing name, skipped."); continue; }
+      var ptsRaw = colIdx.pts !== undefined ? cols[colIdx.pts] : cols[3];
+      var pts = parseFloat(ptsRaw);
+      if (isNaN(pts)) { errors.push("Line " + (i + 1) + ": missing/invalid points, skipped."); continue; }
+      entries.push({
+        name: name,
+        pos: normalizePos(colIdx.pos !== undefined ? cols[colIdx.pos] : (cols[1] || "")),
+        team: (colIdx.team !== undefined ? cols[colIdx.team] : (cols[2] || "")) || "",
+        pts: pts
+      });
+    }
+    return { entries: entries, errors: errors };
+  }
+
+  // Generational suffixes (Jr, III, ...) sit as the trailing word, which would otherwise be
+  // mistaken for the surname by the last-word-as-surname heuristic below — drop them first.
+  var NAME_SUFFIXES = { jr: 1, sr: 1, ii: 1, iii: 1, iv: 1, v: 1 };
+  function stripNameSuffix(words) {
+    if (words.length > 1 && NAME_SUFFIXES[words[words.length - 1]]) return words.slice(0, -1);
+    return words;
+  }
+
+  // Matches projected-points rows onto state.rankings by name. Exact normalized match first;
+  // failing that, last-name + first-initial match (so sources that truncate first names, e.g.
+  // "B. Robinson", still resolve), with team used to break ties among same-surname players.
+  // Defenses match by team + position instead of name, since name formatting for defenses
+  // varies wildly between sources ("Broncos" vs "Denver Defense").
+  function mergeProjPts(list) {
+    state.rankings.forEach(function (p) { delete p.projPts; });
+    var matched = 0, ambiguous = 0;
+    list.forEach(function (entry) {
+      var isDst = entry.pos === "DST" || entry.pos === "DEF";
+      var candidates;
+      if (isDst && entry.team) {
+        var entryTeam = normalizeTeamAbbr(entry.team);
+        candidates = state.rankings.filter(function (p) {
+          return (p.pos === "DST" || p.pos === "DEF") && p.team && normalizeTeamAbbr(p.team) === entryTeam;
+        });
+      } else {
+        var key = normalizeForMatch(entry.name);
+        candidates = state.rankings.filter(function (p) { return normalizeForMatch(p.name) === key; });
+        if (!candidates.length) {
+          var eWords = stripNameSuffix(key.split(/\s+/).filter(Boolean));
+          if (eWords.length >= 2) {
+            var eLast = eWords[eWords.length - 1];
+            var eFirst = eWords[0];
+            candidates = state.rankings.filter(function (p) {
+              var pWords = stripNameSuffix(normalizeForMatch(p.name).split(/\s+/).filter(Boolean));
+              if (pWords.length < 2) return false;
+              var pLast = pWords[pWords.length - 1];
+              var pFirst = pWords[0];
+              return pLast === eLast && pFirst.indexOf(eFirst) === 0;
+            });
+          }
+        }
+      }
+      if (!candidates.length) return;
+      var chosen = candidates[0];
+      if (candidates.length > 1) {
+        var teamMatch = entry.team ? candidates.filter(function (c) {
+          return c.team && normalizeTeamAbbr(c.team) === normalizeTeamAbbr(entry.team);
+        }) : [];
+        if (teamMatch.length === 1) chosen = teamMatch[0];
+        else ambiguous++;
+      }
+      chosen.projPts = entry.pts;
+      matched++;
+    });
+    return { matched: matched, ambiguous: ambiguous, total: list.length };
+  }
+
+  // ---------- Tiering ----------
+  function mean(arr) { return arr.reduce(function (a, b) { return a + b; }, 0) / arr.length; }
+  function stddev(arr, m) {
+    var v = arr.reduce(function (a, b) { return a + (b - m) * (b - m); }, 0) / arr.length;
+    return Math.sqrt(v);
+  }
+
+  // Splits players (sorted desc by projPts) into tiers at the largest gaps: a gap starts a
+  // new tier once it exceeds the position's typical gap by more than one standard deviation.
+  function computeTiers(players) {
+    if (!players.length) return [];
+    if (players.length === 1) return [players.slice()];
+    var gaps = [];
+    for (var i = 1; i < players.length; i++) gaps.push(players[i - 1].projPts - players[i].projPts);
+    var m = mean(gaps), sd = stddev(gaps, m);
+    var threshold = Math.max(m + sd, m * 1.5, 1);
+    var tiers = [[players[0]]];
+    for (i = 1; i < players.length; i++) {
+      var gap = players[i - 1].projPts - players[i].projPts;
+      if (gap > threshold) tiers.push([]);
+      tiers[tiers.length - 1].push(players[i]);
+    }
+    return tiers;
   }
 
   // ---------- Injury data (Sleeper) ----------
@@ -786,6 +986,7 @@
         if (btn.dataset.tab === "teams") renderTeams();
         if (btn.dataset.tab === "grades") renderGrades();
         if (btn.dataset.tab === "draft") renderDraft();
+        if (btn.dataset.tab === "analysis") renderAnalysis();
       });
     });
   }
@@ -881,6 +1082,7 @@
       tr.innerHTML = "<td>" + formatRank(p.rank) + "</td><td>" + escapeHtml(p.name) + "</td>" +
         "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>" +
         "<td>" + escapeHtml(p.bye) + "</td>" +
+        "<td>" + (typeof p.projPts === "number" ? p.projPts.toFixed(1) : "") + "</td>" +
         "<td>" + injuryBadgeHtml(p.injury) + "</td>";
       body.appendChild(tr);
     });
@@ -1103,6 +1305,7 @@
       tr.innerHTML = "<td>" + formatRank(p.rank) + "</td><td>" + escapeHtml(p.name) + "</td>" +
         "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>" +
         "<td>" + escapeHtml(p.bye) + "</td>" +
+        "<td>" + (typeof p.projPts === "number" ? p.projPts.toFixed(1) : "") + "</td>" +
         "<td>" + injuryBadgeHtml(p.injury) + "</td>";
       tr.appendChild(tdBtn);
       body.appendChild(tr);
@@ -1340,6 +1543,102 @@
     });
   }
 
+  // ---------- Analysis (best by position, tiers, NFL team depth charts) ----------
+  function renderAnalysisPosFilters() {
+    var wrap = el("analysisPosFilters");
+    wrap.innerHTML = "";
+    STARTER_POSITIONS.forEach(function (pos) {
+      var btn = document.createElement("button");
+      btn.textContent = pos;
+      if (pos === state.analysisPosFilter) btn.classList.add("active");
+      btn.addEventListener("click", function () {
+        state.analysisPosFilter = pos;
+        save();
+        renderTiersBody();
+      });
+      wrap.appendChild(btn);
+    });
+  }
+
+  function renderTiersBody() {
+    renderAnalysisPosFilters();
+    var body = el("tiersBody");
+    body.innerHTML = "";
+    var pos = state.analysisPosFilter;
+    var withPts = state.rankings.filter(function (p) { return p.pos === pos && typeof p.projPts === "number"; });
+    withPts.sort(function (a, b) { return b.projPts - a.projPts; });
+    if (!withPts.length) {
+      body.innerHTML = "<tr><td colspan='6' class='muted'>No " + pos +
+        " players with projected points yet — import projected points on the Setup tab.</td></tr>";
+      return;
+    }
+    var drafted = draftedNameSet();
+    var tiers = computeTiers(withPts);
+    tiers.forEach(function (tierPlayers, tierIdx) {
+      var trh = document.createElement("tr");
+      trh.className = "tier-header";
+      trh.innerHTML = "<td colspan='6'>Tier " + (tierIdx + 1) + "</td>";
+      body.appendChild(trh);
+      tierPlayers.forEach(function (p) {
+        var isDrafted = drafted.has(p.name.toLowerCase());
+        var tr = document.createElement("tr");
+        if (isDrafted) tr.style.opacity = ".5";
+        tr.innerHTML = "<td></td><td>" + escapeHtml(p.name) + "</td><td>" + escapeHtml(p.team) + "</td>" +
+          "<td>" + escapeHtml(p.bye) + "</td><td>" + p.projPts.toFixed(1) + "</td>" +
+          "<td>" + (isDrafted ? "<span class='badge neutral'>drafted</span>" : "") + "</td>";
+        body.appendChild(tr);
+      });
+    });
+  }
+
+  function renderDepthCharts() {
+    var grid = el("depthChartGrid");
+    grid.innerHTML = "";
+    var withPts = state.rankings.filter(function (p) { return typeof p.projPts === "number" && p.team; });
+    var byTeam = {};
+    withPts.forEach(function (p) {
+      var team = p.team.toUpperCase();
+      byTeam[team] = byTeam[team] || [];
+      byTeam[team].push(p);
+    });
+    var teams = Object.keys(byTeam).sort();
+    if (!teams.length) {
+      grid.innerHTML = "<p class='small muted'>No players with both a team and projected points yet.</p>";
+      return;
+    }
+    var posOrder = ["QB", "RB", "WR", "TE", "DST", "K"];
+    teams.forEach(function (team) {
+      var card = document.createElement("div");
+      card.className = "team-card";
+      var h4 = document.createElement("h4");
+      h4.textContent = team;
+      card.appendChild(h4);
+      var byPos = {};
+      byTeam[team].forEach(function (p) {
+        byPos[p.pos] = byPos[p.pos] || [];
+        byPos[p.pos].push(p);
+      });
+      posOrder.forEach(function (pos) {
+        var list = byPos[pos];
+        if (!list || !list.length) return;
+        list.sort(function (a, b) { return b.projPts - a.projPts; });
+        list.forEach(function (p, i) {
+          var row = document.createElement("div");
+          row.className = "slot-row";
+          row.innerHTML = "<span class='slot-name'>" + pos + (list.length > 1 ? (i + 1) : "") + "</span><span>" +
+            escapeHtml(p.name) + " <span class='muted small'>" + p.projPts.toFixed(1) + "</span></span>";
+          card.appendChild(row);
+        });
+      });
+      grid.appendChild(card);
+    });
+  }
+
+  function renderAnalysis() {
+    renderTiersBody();
+    renderDepthCharts();
+  }
+
   // ---------- Event wiring ----------
   function applyTeamCount() {
     var n = Math.max(2, Math.min(20, parseInt(el("numTeams").value, 10) || 2));
@@ -1447,6 +1746,48 @@
     });
 
     el("fetchInjuriesBtn").addEventListener("click", fetchInjuries);
+
+    el("importProjPtsBtn").addEventListener("click", function () {
+      if (!state.rankings.length) { el("projPtsStatus").textContent = "Import rankings first."; return; }
+      var result = parseProjPtsCsv(el("projPtsInput").value);
+      if (!result.entries.length) {
+        el("projPtsStatus").textContent = "Nothing imported. " + (result.errors[0] || "Check the CSV format.");
+        return;
+      }
+      var merge = mergeProjPts(result.entries);
+      save();
+      renderRankingsPreview();
+      renderDraft();
+      renderAnalysis();
+      el("projPtsStatus").textContent = "Matched " + merge.matched + " of " + merge.total +
+        " projected-points rows to your rankings" +
+        (merge.ambiguous ? " (" + merge.ambiguous + " ambiguous match" + (merge.ambiguous > 1 ? "es" : "") +
+          " — picked first candidate, worth double-checking)" : "") +
+        (result.errors.length ? ". " + result.errors.length + " line(s) skipped." : ".");
+      toast("Projected points: " + merge.matched + " matched.");
+    });
+
+    el("projPtsFile").addEventListener("change", function (e) {
+      var file = e.target.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        el("projPtsInput").value = reader.result;
+        el("importProjPtsBtn").click();
+      };
+      reader.readAsText(file);
+    });
+
+    el("clearProjPtsBtn").addEventListener("click", function () {
+      if (!confirm("Clear all projected points?")) return;
+      state.rankings.forEach(function (p) { delete p.projPts; });
+      save();
+      renderRankingsPreview();
+      renderDraft();
+      renderAnalysis();
+      el("projPtsStatus").textContent = "";
+      toast("Projected points cleared.");
+    });
 
     el("searchBox").addEventListener("input", function () {
       state.search = el("searchBox").value;
