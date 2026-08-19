@@ -93,6 +93,13 @@ to your browser's local storage as you go.
 Roster slot assignment is automatic: a pick fills the matching starter slot
 if open, else FLEX (for RB/WR/TE) if open, else bench.
 
+**Your picks by round**: shows your team's pick number in every round (computed from the
+draft order/snake settings and your configured roster size). Rounds already picked show
+what you actually took; rounds still ahead show a "chalk" projection — the player who'd be
+next in your rankings if every pick between now and then goes in rank order — plus two
+runners-up. It's a reference point for planning, not a prediction, since real drafts don't
+follow rank order.
+
 #### Voice mode
 
 Click **🎤 Voice** next to the search box and speak a command (requires a

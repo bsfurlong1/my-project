@@ -366,6 +366,19 @@ Bijan Robinson,RB,ATL,330.98
       </div>
     </div>
 
+    <div class="panel">
+      <h2>Your picks by round</h2>
+      <p class="small muted">Your team's pick number in every round. For rounds already picked, shows what you took.
+        For rounds still ahead, shows who'd likely still be on the board <em>if the draft continues roughly in rank
+        order from here</em> — a chalk projection, not a guarantee, since real drafts deviate from rank.</p>
+      <div class="table-scroll" style="max-height:280px;">
+        <table>
+          <thead><tr><th>Round</th><th>Pick #</th><th>Picks away</th><th>Status</th></tr></thead>
+          <tbody id="yourPicksBody"></tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="grid-3">
       <div class="panel">
         <h2>Best available</h2>
@@ -940,6 +953,23 @@ Bijan Robinson,RB,ATL,330.98
     return { round: Math.floor(zeroBased / n) + 1, pickInRound: (zeroBased % n) + 1 };
   }
 
+  // The overall pick number at which a given team is on the clock in a given round.
+  function pickNumberForTeamInRound(teamIdx, round) {
+    var n = state.numTeams;
+    if (n <= 0) return null;
+    var start = (round - 1) * n + 1;
+    for (var i = 0; i < n; i++) {
+      var pickNum = start + i;
+      if (teamIndexForPick(pickNum) === teamIdx) return pickNum;
+    }
+    return null;
+  }
+
+  // Total rounds = total roster spots per team, since each team picks once per round.
+  function totalRoundsForRoster() {
+    return ROSTER_ORDER.reduce(function (sum, slot) { return sum + (state.rosterSlots[slot] || 0); }, 0);
+  }
+
   // ---------- Roster slot assignment ----------
   function emptyRosterCounts() {
     var counts = {};
@@ -1263,6 +1293,63 @@ Bijan Robinson,RB,ATL,330.98
     });
   }
 
+  // For each round, your team's pick number, and either what you actually took (if that pick
+  // has already happened) or a "chalk" projection of who'd still be on the board — the Nth
+  // still-undrafted player by rank, where N = how many total picks (by any team) happen
+  // between now and yours. That's a best-case reference point, not a real prediction: it
+  // assumes every pick between now and then goes in rank order, which real drafts rarely do.
+  function renderYourPicks(drafted) {
+    var tbody = el("yourPicksBody");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+    if (state.numTeams <= 0 || !state.teamNames.length) {
+      tbody.innerHTML = "<tr><td colspan='4' class='muted'>Set up teams first.</td></tr>";
+      return;
+    }
+    var rounds = totalRoundsForRoster();
+    if (!rounds) {
+      tbody.innerHTML = "<tr><td colspan='4' class='muted'>Set roster slots on the Setup tab first.</td></tr>";
+      return;
+    }
+    var currentPickCount = state.picks.length;
+    var undrafted = state.rankings.filter(function (p) { return !drafted.has(p.name.toLowerCase()); });
+
+    for (var r = 1; r <= rounds; r++) {
+      var pickNum = pickNumberForTeamInRound(state.yourTeamIndex, r);
+      if (pickNum === null) continue;
+      var tr = document.createElement("tr");
+      var statusHtml;
+      if (pickNum <= currentPickCount) {
+        var made = state.picks.filter(function (p) { return p.pickNumber === pickNum; })[0];
+        if (made) {
+          var offSlot = made.teamIndex !== state.yourTeamIndex;
+          statusHtml = "<span class='badge good'>" + escapeHtml(made.name) + "</span> " +
+            "<span class='pos-pill pos-" + made.pos + "'>" + made.pos + "</span>" +
+            (offSlot ? " <span class='hint'>(picked by " + escapeHtml(state.teamNames[made.teamIndex] || "another team") + ")</span>" : "");
+        } else {
+          statusHtml = "<span class='muted'>—</span>";
+        }
+      } else {
+        var picksAway = pickNum - (currentPickCount + 1);
+        var chalk = undrafted[picksAway];
+        if (!chalk) {
+          statusHtml = "<span class='muted'>Rankings run out before this pick.</span>";
+        } else {
+          var alt1 = undrafted[picksAway + 1], alt2 = undrafted[picksAway + 2];
+          var altNames = [alt1, alt2].filter(Boolean).map(function (p) { return escapeHtml(p.name); }).join(", ");
+          statusHtml = "<span class='pos-pill pos-" + chalk.pos + "'>" + chalk.pos + "</span> " +
+            escapeHtml(chalk.name) +
+            (typeof chalk.projPts === "number" ? " <span class='muted small'>(" + chalk.projPts.toFixed(1) + " pts)</span>" : "") +
+            (altNames ? "<div class='hint'>or: " + altNames + "</div>" : "");
+        }
+      }
+      var isNextForYou = pickNum === currentPickCount + 1;
+      tr.innerHTML = "<td>" + r + "</td><td>" + pickNum + (isNextForYou ? " <span class='badge warn'>next</span>" : "") + "</td>" +
+        "<td>" + Math.max(0, pickNum - (currentPickCount + 1)) + "</td><td>" + statusHtml + "</td>";
+      tbody.appendChild(tr);
+    }
+  }
+
   function renderDraft() {
     renderAllTeamSelectors();
     renderPosFilters();
@@ -1283,6 +1370,8 @@ Bijan Robinson,RB,ATL,330.98
     }
 
     var drafted = draftedNameSet();
+    renderYourPicks(drafted);
+
     var search = state.search.toLowerCase();
     var body = el("bestAvailableBody");
     body.innerHTML = "";
