@@ -207,6 +207,17 @@
 
   .drafted-name { text-decoration: line-through; opacity: .6; }
 
+  tr.pick-range-row { background: var(--warn-bg); }
+  tr.pick-marker-row td {
+    background: var(--accent);
+    color: var(--accent-fg);
+    font-weight: 700;
+    font-size: 11.5px;
+    text-align: center;
+    letter-spacing: .02em;
+    padding: 6px 8px;
+  }
+
   .tier-header td {
     background: var(--bg);
     font-weight: 700;
@@ -384,6 +395,9 @@ Bijan Robinson,RB,ATL,330.98
     <div class="grid-3">
       <div class="panel">
         <h2>Best available</h2>
+        <p class="small muted">The highlighted band marks the range where your next pick would land if the draft
+          goes in rank order from here, with a divider at the exact chalk spot — hidden while filtering by
+          position or searching, since the range only lines up against the full ranked list.</p>
         <div class="filters" id="posFilters"></div>
         <div style="display:flex; gap:6px;">
           <input type="text" id="searchBox" placeholder="Search player name, or use voice..." style="flex:1;">
@@ -972,6 +986,18 @@ Bijan Robinson,RB,ATL,330.98
     return ROSTER_ORDER.reduce(function (sum, slot) { return sum + (state.rosterSlots[slot] || 0); }, 0);
   }
 
+  // The next overall pick number (>= fromPickNumber) at which teamIdx is on the clock,
+  // including fromPickNumber itself if it's already their turn.
+  function nextPickNumberForTeam(teamIdx, fromPickNumber) {
+    if (state.numTeams <= 0) return null;
+    var pickNum = fromPickNumber;
+    for (var i = 0; i < state.numTeams * 2; i++) {
+      if (teamIndexForPick(pickNum) === teamIdx) return pickNum;
+      pickNum++;
+    }
+    return null;
+  }
+
   // ---------- Roster slot assignment ----------
   function emptyRosterCounts() {
     var counts = {};
@@ -1377,14 +1403,39 @@ Bijan Robinson,RB,ATL,330.98
     var search = state.search.toLowerCase();
     var body = el("bestAvailableBody");
     body.innerHTML = "";
+
+    // Where your next pick would land if the draft goes in rank order from here, plus a band
+    // of rows around it as the realistic range — only meaningful against the unfiltered,
+    // rank-ordered list, so it's suppressed while a position filter or search is active.
+    var showPickMarker = state.posFilter === "ALL" && !search && state.numTeams > 0;
+    var picksAway = null, bandHalf = 0;
+    if (showPickMarker) {
+      var nextPickNum = nextPickNumberForTeam(state.yourTeamIndex, totalPicks + 1);
+      if (nextPickNum !== null) {
+        picksAway = nextPickNum - (totalPicks + 1);
+        bandHalf = Math.max(1, Math.ceil(state.numTeams / 2));
+      }
+    }
+
     var shown = 0;
+    var idx = 0; // position within the undrafted, rank-ordered list (matches picksAway's units)
     for (var i = 0; i < state.rankings.length && shown < 200; i++) {
       var p = state.rankings[i];
       if (drafted.has(p.name.toLowerCase())) continue;
       if (state.posFilter !== "ALL" && p.pos !== state.posFilter) continue;
       if (search && p.name.toLowerCase().indexOf(search) === -1) continue;
+
+      if (picksAway !== null && idx === picksAway) {
+        var marker = document.createElement("tr");
+        marker.className = "pick-marker-row";
+        marker.innerHTML = "<td colspan='8'>▼ Your next pick — Pick #" + nextPickNum + " (in " +
+          picksAway + " pick" + (picksAway === 1 ? "" : "s") + ") — chalk if the draft goes in rank order ▼</td>";
+        body.appendChild(marker);
+      }
+
       shown++;
       var tr = document.createElement("tr");
+      if (picksAway !== null && Math.abs(idx - picksAway) <= bandHalf) tr.classList.add("pick-range-row");
       var tdBtn = document.createElement("td");
       var btn = document.createElement("button");
       btn.className = "btn btn-sm"; btn.textContent = "Draft";
@@ -1400,6 +1451,7 @@ Bijan Robinson,RB,ATL,330.98
         "<td>" + injuryBadgeHtml(p.injury) + "</td>";
       tr.appendChild(tdBtn);
       body.appendChild(tr);
+      idx++;
     }
 
     var logBody = el("draftLogBody");
