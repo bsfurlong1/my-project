@@ -205,6 +205,8 @@
   .badge.warn { background: var(--warn-bg); color: #9a6700; }
   .badge.neutral { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
 
+  .drafted-name { text-decoration: line-through; opacity: .6; }
+
   .tier-header td {
     background: var(--bg);
     font-weight: 700;
@@ -1671,8 +1673,9 @@ Bijan Robinson,RB,ATL,330.98
       tierPlayers.forEach(function (p) {
         var isDrafted = drafted.has(p.name.toLowerCase());
         var tr = document.createElement("tr");
-        if (isDrafted) tr.style.opacity = ".5";
-        tr.innerHTML = "<td></td><td>" + escapeHtml(p.name) + "</td><td>" + escapeHtml(p.team) + "</td>" +
+        if (isDrafted) tr.style.opacity = ".6";
+        tr.innerHTML = "<td></td><td" + (isDrafted ? " class='drafted-name'" : "") + ">" + escapeHtml(p.name) + "</td>" +
+          "<td>" + escapeHtml(p.team) + "</td>" +
           "<td>" + escapeHtml(p.bye) + "</td><td>" + p.projPts.toFixed(1) + "</td>" +
           "<td>" + (isDrafted ? "<span class='badge neutral'>drafted</span>" : "") + "</td>";
         body.appendChild(tr);
@@ -1683,6 +1686,7 @@ Bijan Robinson,RB,ATL,330.98
   function renderDepthCharts() {
     var grid = el("depthChartGrid");
     grid.innerHTML = "";
+    var drafted = draftedNameSet();
     var withPts = state.rankings.filter(function (p) { return typeof p.projPts === "number" && p.team; });
     var byTeam = {};
     withPts.forEach(function (p) {
@@ -1712,10 +1716,13 @@ Bijan Robinson,RB,ATL,330.98
         if (!list || !list.length) return;
         list.sort(function (a, b) { return b.projPts - a.projPts; });
         list.forEach(function (p, i) {
+          var isDrafted = drafted.has(p.name.toLowerCase());
           var row = document.createElement("div");
           row.className = "slot-row";
+          if (isDrafted) row.style.opacity = ".6";
           row.innerHTML = "<span class='slot-name'>" + pos + (list.length > 1 ? (i + 1) : "") + "</span><span>" +
-            escapeHtml(p.name) + " <span class='muted small'>" + p.projPts.toFixed(1) + "</span></span>";
+            "<span" + (isDrafted ? " class='drafted-name'" : "") + ">" + escapeHtml(p.name) + "</span>" +
+            " <span class='muted small'>" + p.projPts.toFixed(1) + "</span></span>";
           card.appendChild(row);
         });
       });
