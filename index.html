@@ -486,7 +486,7 @@ Bijan Robinson,RB,ATL,330.98
       <div class="filters" id="analysisPosFilters"></div>
       <div class="table-scroll" style="max-height:600px;">
         <table>
-          <thead><tr><th>Tier</th><th>Player</th><th>Team</th><th>Bye</th><th>Proj Pts</th><th>Status</th></tr></thead>
+          <thead><tr><th>Tier</th><th>Player</th><th>Team</th><th>Bye</th><th>Proj Pts</th><th>Inj</th><th>Status</th></tr></thead>
           <tbody id="tiersBody"></tbody>
         </table>
       </div>
@@ -1711,7 +1711,7 @@ Bijan Robinson,RB,ATL,330.98
     var withPts = state.rankings.filter(function (p) { return p.pos === pos && typeof p.projPts === "number"; });
     withPts.sort(function (a, b) { return b.projPts - a.projPts; });
     if (!withPts.length) {
-      body.innerHTML = "<tr><td colspan='6' class='muted'>No " + pos +
+      body.innerHTML = "<tr><td colspan='7' class='muted'>No " + pos +
         " players with projected points yet — import projected points on the Setup tab.</td></tr>";
       return;
     }
@@ -1720,7 +1720,7 @@ Bijan Robinson,RB,ATL,330.98
     tiers.forEach(function (tierPlayers, tierIdx) {
       var trh = document.createElement("tr");
       trh.className = "tier-header";
-      trh.innerHTML = "<td colspan='6'>Tier " + (tierIdx + 1) + "</td>";
+      trh.innerHTML = "<td colspan='7'>Tier " + (tierIdx + 1) + "</td>";
       body.appendChild(trh);
       tierPlayers.forEach(function (p) {
         var isDrafted = drafted.has(p.name.toLowerCase());
@@ -1729,6 +1729,7 @@ Bijan Robinson,RB,ATL,330.98
         tr.innerHTML = "<td></td><td" + (isDrafted ? " class='drafted-name'" : "") + ">" + escapeHtml(p.name) + "</td>" +
           "<td>" + escapeHtml(p.team) + "</td>" +
           "<td>" + escapeHtml(p.bye) + "</td><td>" + p.projPts.toFixed(1) + "</td>" +
+          "<td>" + injuryBadgeHtml(p.injury) + "</td>" +
           "<td>" + (isDrafted ? "<span class='badge neutral'>drafted</span>" : "") + "</td>";
         body.appendChild(tr);
       });
