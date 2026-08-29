@@ -316,6 +316,7 @@
       <h2>Player rankings</h2>
       <p class="small muted">Import your own rankings/ADP as CSV (columns: <code>rank,name,position,team,bye</code> — header row optional, <code>team</code> and <code>bye</code> optional). Or load placeholder sample data to try the app out.</p>
       <p class="small muted">On import, rookies are auto-tagged against a built-in list of this year's draft class — click the <strong>Rook</strong> badge for any player to correct or add one manually (this app has no live feed for it, so treat it as a best-effort starting point).</p>
+      <p class="small muted">Re-importing rankings (e.g. a refreshed ADP pull) replaces the player list, so it automatically re-matches whatever's still in the Projected points box below. Fetched injury data isn't re-applied automatically — re-click <strong>Fetch injury data</strong> after updating rankings.</p>
       <div class="grid-2">
         <div>
           <label for="csvInput">Paste CSV</label>
@@ -1955,10 +1956,28 @@ Bijan Robinson,RB,ATL,330.98
       }
       state.rankings = result.players;
       save();
+
+      // Rankings are a fresh player list, so any previously-matched projected points (and
+      // injuries) are gone from these new objects. Re-apply whatever's still in the projected
+      // points box so re-importing updated rankings (e.g. a refreshed ADP pull) doesn't silently
+      // drop points you already loaded.
+      var reMergeNote = "";
+      var projText = el("projPtsInput").value.trim();
+      if (projText) {
+        var projResult = parseProjPtsCsv(projText);
+        if (projResult.entries.length) {
+          var merge = mergeProjPts(projResult.entries);
+          save();
+          reMergeNote = " Re-matched " + merge.matched + " projected-points row(s) from the box below" +
+            (merge.ambiguous ? " (" + merge.ambiguous + " ambiguous)" : "") + ".";
+        }
+      }
+
       renderRankingsPreview();
       renderDraft();
+      renderAnalysis();
       el("csvStatus").textContent = "Imported " + result.players.length + " players." +
-        (result.errors.length ? " (" + result.errors.length + " lines skipped)" : "");
+        (result.errors.length ? " (" + result.errors.length + " lines skipped)" : "") + reMergeNote;
     });
 
     el("csvFile").addEventListener("change", function (e) {
