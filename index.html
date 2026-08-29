@@ -21,6 +21,8 @@
     --row-hover: #f0f4ff;
     --slot-open: #fff3f0;
     --slot-filled: #eef7ee;
+    --rook: #7c3aed;
+    --rook-bg: #f1e9ff;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -39,6 +41,8 @@
       --row-hover: #232833;
       --slot-open: #3a2420;
       --slot-filled: #1c2e1f;
+      --rook: #b794f6;
+      --rook-bg: #2f2140;
     }
   }
   * { box-sizing: border-box; }
@@ -204,6 +208,19 @@
   .badge.bad { background: var(--bad-bg); color: var(--bad); }
   .badge.warn { background: var(--warn-bg); color: #9a6700; }
   .badge.neutral { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
+  .badge.rookie { background: var(--rook-bg); color: var(--rook); }
+  .rookie-toggle {
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--muted);
+    border-radius: 999px;
+    width: 22px; height: 22px;
+    font-size: 10px; font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+  }
+  .rookie-toggle.active { background: var(--rook-bg); color: var(--rook); border-color: var(--rook); }
 
   .drafted-name { text-decoration: line-through; opacity: .6; }
 
@@ -298,6 +315,7 @@
     <div class="panel">
       <h2>Player rankings</h2>
       <p class="small muted">Import your own rankings/ADP as CSV (columns: <code>rank,name,position,team,bye</code> — header row optional, <code>team</code> and <code>bye</code> optional). Or load placeholder sample data to try the app out.</p>
+      <p class="small muted">On import, rookies are auto-tagged against a built-in list of this year's draft class — click the <strong>Rook</strong> badge for any player to correct or add one manually (this app has no live feed for it, so treat it as a best-effort starting point).</p>
       <div class="grid-2">
         <div>
           <label for="csvInput">Paste CSV</label>
@@ -323,7 +341,7 @@
           <label>Current rankings (<span id="rankingsCount">0</span> players)</label>
           <div class="table-scroll" style="max-height:260px;">
             <table>
-              <thead><tr><th>#</th><th>Name</th><th>Pos</th><th>Team</th><th>Bye</th><th>Pts</th><th>Inj</th></tr></thead>
+              <thead><tr><th>#</th><th>Name</th><th>Pos</th><th>Team</th><th>Bye</th><th>Pts</th><th>Inj</th><th>Rook</th></tr></thead>
               <tbody id="rankingsPreview"></tbody>
             </table>
           </div>
@@ -630,7 +648,8 @@ Bijan Robinson,RB,ATL,330.98
         name: name,
         pos: normalizePos(colIdx.pos !== undefined ? cols[colIdx.pos] : cols[2]),
         team: (colIdx.team !== undefined ? cols[colIdx.team] : (cols[3] || "")) || "",
-        bye: (colIdx.bye !== undefined ? cols[colIdx.bye] : (cols[4] || "")) || ""
+        bye: (colIdx.bye !== undefined ? cols[colIdx.bye] : (cols[4] || "")) || "",
+        rookie: isKnownRookie(name)
       });
     }
     players.sort(function (a, b) { return a.rank - b.rank; });
@@ -639,6 +658,65 @@ Bijan Robinson,RB,ATL,330.98
 
   function formatRank(r) {
     return Number.isInteger(r) ? String(r) : r.toFixed(1);
+  }
+
+  // ---------- Rookie tagging ----------
+  // Best-effort static list of fantasy-relevant 2025 rookies — there's no live feed for this,
+  // so it's a starting point only. Matched by name at import time; wrong or missing entries
+  // are meant to be corrected via the Rook toggle in the rankings table, not fixed here per user.
+  var ROOKIE_NAMES = [
+    "Cam Ward", "Jaxson Dart", "Shedeur Sanders", "Tyler Shough", "Jalen Milroe",
+    "Dillon Gabriel", "Will Howard", "Quinn Ewers",
+    "Ashton Jeanty", "Omarion Hampton", "TreVeyon Henderson", "Quinshon Judkins",
+    "RJ Harvey", "Kaleb Johnson", "Bhayshul Tuten", "Woody Marks", "Cam Skattebo",
+    "Dylan Sampson", "Jaydon Blue", "DJ Giddens", "Jarquez Hunter", "Damien Martinez",
+    "Kyle Monangai", "LeQuint Allen", "Devin Neal", "Phil Mafah", "Brashard Smith",
+    "Tahj Brooks", "Trevor Etienne", "Jordan James",
+    "Tetairoa McMillan", "Emeka Egbuka", "Matthew Golden", "Luther Burden III",
+    "Jayden Higgins", "Tre Harris", "Jack Bech", "Jaylin Noel", "Isaiah Bond",
+    "Kyle Williams", "Elic Ayomanor", "Pat Bryant", "Jalen Royals", "Dont'e Thornton Jr.",
+    "Xavier Restrepo", "Zachariah Branch", "Isaac TeSlaa", "Savion Williams",
+    "Tory Horton", "Jaylin Lane", "Konata Mumpfield", "Ricky White",
+    "De'Zhaun Stribling",
+    "Tyler Warren", "Colston Loveland", "Mason Taylor", "Harold Fannin Jr.",
+    "Elijah Arroyo", "Gunnar Helm", "Terrance Ferguson", "Oronde Gadsden II",
+    "Jake Briningstool", "Robbie Ouzts", "Mitchell Evans"
+  ];
+  var ROOKIE_NAME_SET = null;
+  var ROOKIE_NAME_TOKENS = null;
+
+  // Built lazily on first use rather than at script-parse time, since it depends on
+  // NAME_SUFFIXES (a plain var assigned further down the file, not hoisted with its value).
+  function ensureRookieIndex() {
+    if (ROOKIE_NAME_SET) return;
+    ROOKIE_NAME_SET = {};
+    ROOKIE_NAME_TOKENS = [];
+    ROOKIE_NAMES.forEach(function (n) {
+      ROOKIE_NAME_SET[normalizeForMatch(n)] = true;
+      ROOKIE_NAME_TOKENS.push(stripNameSuffix(normalizeForMatch(n).split(/\s+/).filter(Boolean)));
+    });
+  }
+
+  function isKnownRookie(name) {
+    ensureRookieIndex();
+    var key = normalizeForMatch(name);
+    if (ROOKIE_NAME_SET[key]) return true;
+    var words = stripNameSuffix(key.split(/\s+/).filter(Boolean));
+    if (words.length < 2) return false;
+    var last = words[words.length - 1], first = words[0];
+    return ROOKIE_NAME_TOKENS.some(function (t) {
+      return t.length > 1 && t[t.length - 1] === last && t[0].indexOf(first) === 0;
+    });
+  }
+
+  function toggleRookie(index) {
+    var p = state.rankings[index];
+    if (!p) return;
+    p.rookie = !p.rookie;
+    save();
+    renderRankingsPreview();
+    renderDraft();
+    renderAnalysis();
   }
 
   function sampleCsv() {
@@ -823,6 +901,11 @@ Bijan Robinson,RB,ATL,330.98
     if (!cls) return "";
     var title = injury.detail ? (injury.status + " — " + injury.detail) : injury.status;
     return "<span class='badge " + cls + "' title='" + escapeHtml(title) + "'>" + escapeHtml(shortInjuryLabel(injury.status)) + "</span>";
+  }
+
+  function rookieBadgeHtml(p) {
+    if (!p || !p.rookie) return "";
+    return " <span class='badge rookie' title='Tagged as a rookie (best-effort, see Setup tab)'>R</span>";
   }
 
   // Returns {ok:true, data} or {ok:false, error} — never throws — so callers can tell
@@ -1135,13 +1218,22 @@ Bijan Robinson,RB,ATL,330.98
     el("rankingsCount").textContent = state.rankings.length;
     var body = el("rankingsPreview");
     body.innerHTML = "";
-    state.rankings.slice(0, 300).forEach(function (p) {
+    state.rankings.slice(0, 300).forEach(function (p, i) {
       var tr = document.createElement("tr");
       tr.innerHTML = "<td>" + formatRank(p.rank) + "</td><td>" + escapeHtml(p.name) + "</td>" +
         "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>" +
         "<td>" + escapeHtml(p.bye) + "</td>" +
         "<td>" + (typeof p.projPts === "number" ? p.projPts.toFixed(1) : "") + "</td>" +
-        "<td>" + injuryBadgeHtml(p.injury) + "</td>";
+        "<td>" + injuryBadgeHtml(p.injury) + "</td>" +
+        "<td></td>";
+      var tdRook = tr.lastElementChild;
+      var btn = document.createElement("button");
+      btn.className = "rookie-toggle" + (p.rookie ? " active" : "");
+      btn.type = "button";
+      btn.textContent = "R";
+      btn.title = p.rookie ? "Marked as rookie — click to unmark" : "Not marked as rookie — click to mark";
+      btn.addEventListener("click", function () { toggleRookie(i); });
+      tdRook.appendChild(btn);
       body.appendChild(tr);
     });
   }
@@ -1444,7 +1536,7 @@ Bijan Robinson,RB,ATL,330.98
         btn.addEventListener("click", function () { draftPlayer(player, false); });
       })(p);
       tdBtn.appendChild(btn);
-      tr.innerHTML = "<td>" + formatRank(p.rank) + "</td><td>" + escapeHtml(p.name) + "</td>" +
+      tr.innerHTML = "<td>" + formatRank(p.rank) + "</td><td>" + escapeHtml(p.name) + rookieBadgeHtml(p) + "</td>" +
         "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>" +
         "<td>" + escapeHtml(p.bye) + "</td>" +
         "<td>" + (typeof p.projPts === "number" ? p.projPts.toFixed(1) : "") + "</td>" +
@@ -1726,7 +1818,7 @@ Bijan Robinson,RB,ATL,330.98
         var isDrafted = drafted.has(p.name.toLowerCase());
         var tr = document.createElement("tr");
         if (isDrafted) tr.style.opacity = ".6";
-        tr.innerHTML = "<td></td><td" + (isDrafted ? " class='drafted-name'" : "") + ">" + escapeHtml(p.name) + "</td>" +
+        tr.innerHTML = "<td></td><td" + (isDrafted ? " class='drafted-name'" : "") + ">" + escapeHtml(p.name) + rookieBadgeHtml(p) + "</td>" +
           "<td>" + escapeHtml(p.team) + "</td>" +
           "<td>" + escapeHtml(p.bye) + "</td><td>" + p.projPts.toFixed(1) + "</td>" +
           "<td>" + injuryBadgeHtml(p.injury) + "</td>" +
@@ -1774,7 +1866,7 @@ Bijan Robinson,RB,ATL,330.98
           row.className = "slot-row";
           if (isDrafted) row.style.opacity = ".6";
           row.innerHTML = "<span class='slot-name'>" + pos + (list.length > 1 ? (i + 1) : "") + "</span><span>" +
-            "<span" + (isDrafted ? " class='drafted-name'" : "") + ">" + escapeHtml(p.name) + "</span>" +
+            "<span" + (isDrafted ? " class='drafted-name'" : "") + ">" + escapeHtml(p.name) + "</span>" + rookieBadgeHtml(p) +
             " <span class='muted small'>" + p.projPts.toFixed(1) + "</span></span>";
           card.appendChild(row);
         });
