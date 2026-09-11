@@ -21,6 +21,10 @@
  *   3. Share the spreadsheet (Editor access) with the league. Each member
  *      checks boxes on their own tab. "Division Winners" and "Tally" update
  *      automatically as picks come in.
+ *   4. Once games are underway, run "Update Actual Results" (weekly, e.g.
+ *      every Tuesday) to pull final scores from ESPN and refresh the
+ *      "Weekly Results" tab - a postable per-week and season-to-date
+ *      scoreboard of how each member's picks did against the real games.
  */
 
 const SEASON = 2026;
@@ -28,11 +32,14 @@ const SCHEDULE_SHEET = 'Schedule';
 const DIVWIN_SHEET = 'Division Winners';
 const TALLY_SHEET = 'Tally';
 const MEMBERS_SHEET = 'Members';
+const WEEKLY_RESULTS_SHEET = 'Weekly Results';
 const WEATHER_HISTORY_YEARS = 5;
 
 // Master Schedule tab layout (read-only, no picking here): one header row,
-// then games starting row 2.
-const MASTER_HEADERS = ['Week', 'Date', 'Away', 'Home', 'Stadium Type', 'Avg Temp', 'Snow Chance'];
+// then games starting row 2. Column 8 (Actual Winner) starts blank and is
+// filled in week by week via "Update Actual Results".
+const MASTER_HEADERS = ['Week', 'Date', 'Away', 'Home', 'Stadium Type', 'Avg Temp', 'Snow Chance', 'Actual Winner'];
+const COL_ACTUAL_WINNER = 8;
 const FIRST_DATA_ROW = 2;
 
 // Member tab layout: a checkbox sits immediately next to each team name so
@@ -50,7 +57,7 @@ const COL_HOME = 6;
 const PICK_GREEN = '#b7e1cd';
 const INCOMPLETE_RED = '#f4cccc';
 
-const SYSTEM_SHEETS = [SCHEDULE_SHEET, DIVWIN_SHEET, TALLY_SHEET, MEMBERS_SHEET];
+const SYSTEM_SHEETS = [SCHEDULE_SHEET, DIVWIN_SHEET, TALLY_SHEET, MEMBERS_SHEET, WEEKLY_RESULTS_SHEET];
 
 const DIVISIONS = {
   'AFC East': ['Buffalo Bills', 'Miami Dolphins', 'New England Patriots', 'New York Jets'],
@@ -105,7 +112,8 @@ function onOpen() {
     .createMenu('NFL Picks')
     .addItem('1. Initialize (fetch schedule)', 'showFetchScheduleDialog')
     .addItem('2. Add Member', 'addMemberPrompt')
-    .addItem('3. Recompute Results', 'recomputeResultsMenuAction')
+    .addItem('3. Update Actual Results (weekly)', 'showUpdateResultsDialog')
+    .addItem('4. Recompute Results', 'recomputeResultsMenuAction')
     .addToUi();
 }
 
@@ -205,6 +213,64 @@ function receiveScheduleFromClient(gamesJson, problemsJson) {
     msg += '\n\n(' + problems.length + ' week(s) had issues fetching from your browser - the rest loaded fine.)';
   }
   return { message: msg };
+}
+
+/**
+ * Same browser-fetch trick as showFetchScheduleDialog, but for final scores
+ * instead of the schedule - re-run this weekly as games complete.
+ */
+function showUpdateResultsDialog() {
+  const template = HtmlService.createTemplateFromFile('ResultsDialog');
+  template.season = SEASON;
+  const html = template.evaluate().setWidth(420).setHeight(220);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Fetching ' + SEASON + ' Results');
+}
+
+/**
+ * Called from ResultsDialog.html with every completed game's winner. Matches
+ * each one to its row in the master Schedule (by week + matchup, since fetch
+ * order isn't guaranteed to match) and records it in the Actual Winner
+ * column; unplayed games are left untouched.
+ */
+function receiveResultsFromClient(resultsJson, problemsJson) {
+  const results = JSON.parse(resultsJson);
+  const problems = JSON.parse(problemsJson || '[]');
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const master = ss.getSheetByName(SCHEDULE_SHEET);
+  if (!master) return { message: 'Run "Initialize" first.' };
+
+  try {
+    const numGames = master.getLastRow() - (FIRST_DATA_ROW - 1);
+    if (numGames <= 0) return { message: 'Run "Initialize" first - no games loaded yet.' };
+
+    master.getRange(1, COL_ACTUAL_WINNER).setValue('Actual Winner').setFontWeight('bold');
+    const scheduleRows = master.getRange(FIRST_DATA_ROW, 1, numGames, 4).getValues(); // week, date, away, home
+    const rowForKey = {};
+    scheduleRows.forEach(function (r, i) {
+      rowForKey[r[0] + '|' + r[2] + '|' + r[3]] = FIRST_DATA_ROW + i;
+    });
+
+    let updated = 0;
+    results.forEach(function (r) {
+      const row = rowForKey[r.week + '|' + r.awayName + '|' + r.homeName];
+      if (!row) return;
+      master.getRange(row, COL_ACTUAL_WINNER).setValue(r.winnerName);
+      updated++;
+    });
+
+    ensureRecomputeTrigger();
+    computeResults();
+
+    let msg = 'Updated ' + updated + ' completed game(s).';
+    if (problems.length) {
+      msg += '\n\n(' + problems.length + ' week(s) had issues fetching from your browser - the rest loaded fine.)';
+    }
+    return { message: msg };
+  } catch (err) {
+    return { message: 'Fetch succeeded, but saving failed: ' + err.message +
+      '\n\n(Only the spreadsheet owner can update results.)' };
+  }
 }
 
 /**
@@ -309,7 +375,7 @@ function buildScheduleSheet(games, weather) {
   sheet.getRange(1, 1, 1, MASTER_HEADERS.length).setValues([MASTER_HEADERS]).setFontWeight('bold');
   const rows = games.map(function (g, i) {
     const w = weather[i];
-    return [g.week, formatGameDate(g.date), g.awayName, g.homeName, w.stadiumType, w.tempStr, w.snowStr];
+    return [g.week, formatGameDate(g.date), g.awayName, g.homeName, w.stadiumType, w.tempStr, w.snowStr, ''];
   });
   if (rows.length) {
     sheet.getRange(FIRST_DATA_ROW, 1, rows.length, MASTER_HEADERS.length).setValues(rows);
@@ -519,8 +585,10 @@ function computeResults() {
   const master = ss.getSheetByName(SCHEDULE_SHEET);
   const divSheet = getOrCreateSheet(DIVWIN_SHEET);
   const tallySheet = getOrCreateSheet(TALLY_SHEET);
+  const weeklySheet = getOrCreateSheet(WEEKLY_RESULTS_SHEET);
   divSheet.clear();
   tallySheet.clear();
+  weeklySheet.clear();
 
   if (!master) return;
   const numGames = master.getLastRow() - (FIRST_DATA_ROW - 1);
@@ -528,12 +596,17 @@ function computeResults() {
   if (!memberRecords.length || numGames <= 0) {
     divSheet.getRange(1, 1).setValue('Add members and picks to see results.');
     tallySheet.getRange(1, 1).setValue('Add members and picks to see results.');
+    weeklySheet.getRange(1, 1).setValue('Add members and picks to see results.');
     protectReadOnlySheet(divSheet);
     protectReadOnlySheet(tallySheet);
+    protectReadOnlySheet(weeklySheet);
     return;
   }
 
+  const masterWeeks = master.getRange(FIRST_DATA_ROW, 1, numGames, 1).getValues().map(function (r) { return r[0]; });
   const masterAwayHome = master.getRange(FIRST_DATA_ROW, 3, numGames, 2).getValues();
+  const actualWinners = master.getRange(FIRST_DATA_ROW, COL_ACTUAL_WINNER, numGames, 1).getValues()
+    .map(function (r) { return r[0] || null; });
   const members = memberRecords.map(function (m) { return m.name; });
   const winCounts = members.map(function () { return {}; });
   const pickedCounts = members.map(function () { return 0; });
@@ -571,8 +644,10 @@ function computeResults() {
 
   writeDivisionWinners(divSheet, members, complete, pickedCounts, numGames, results, divNames);
   writeTally(tallySheet, members, complete, results, divNames);
+  writeWeeklyResults(weeklySheet, members, picksByGame, masterWeeks, actualWinners, numGames);
   protectReadOnlySheet(divSheet);
   protectReadOnlySheet(tallySheet);
+  protectReadOnlySheet(weeklySheet);
 }
 
 const ALL_TEAMS = Object.keys(DIVISIONS).reduce(function (acc, div) { return acc.concat(DIVISIONS[div]); }, []);
@@ -802,4 +877,128 @@ function writeTally(tallySheet, members, complete, results, divNames) {
   });
   tallySheet.getRange(1, 1, padded.length, width).setValues(padded);
   tallySheet.autoResizeColumns(1, width);
+}
+
+/**
+ * Scores every member's picks against actual results (Actual Winner column
+ * on the master Schedule - blank for games not yet played). Writes a
+ * postable summary (most recent completed week + season standings) followed
+ * by the full week-by-week matrix. Unlike division winners, this doesn't
+ * require a member's picks to be complete - each game just needs both a
+ * pick and a known result to count.
+ */
+function writeWeeklyResults(sheet, members, picksByGame, masterWeeks, actualWinners, numGames) {
+  const weeks = [];
+  masterWeeks.forEach(function (w) { if (weeks.indexOf(w) === -1) weeks.push(w); });
+  weeks.sort(function (a, b) { return a - b; });
+
+  const completedPerWeek = {};
+  weeks.forEach(function (w) { completedPerWeek[w] = 0; });
+  for (let g = 0; g < numGames; g++) {
+    if (actualWinners[g]) completedPerWeek[masterWeeks[g]]++;
+  }
+
+  const correctPerWeek = members.map(function () {
+    const o = {}; weeks.forEach(function (w) { o[w] = 0; }); return o;
+  });
+  const playedPerWeek = members.map(function () {
+    const o = {}; weeks.forEach(function (w) { o[w] = 0; }); return o;
+  });
+
+  members.forEach(function (mem, m) {
+    for (let g = 0; g < numGames; g++) {
+      const winner = actualWinners[g];
+      const pick = picksByGame[m][g];
+      if (!winner || !pick) continue;
+      const week = masterWeeks[g];
+      playedPerWeek[m][week]++;
+      if (pick === winner) correctPerWeek[m][week]++;
+    }
+  });
+
+  const totalCorrect = members.map(function (mem, m) {
+    return weeks.reduce(function (s, w) { return s + correctPerWeek[m][w]; }, 0);
+  });
+  const totalPlayed = members.map(function (mem, m) {
+    return weeks.reduce(function (s, w) { return s + playedPerWeek[m][w]; }, 0);
+  });
+
+  const latestWeeks = weeks.filter(function (w) { return completedPerWeek[w] > 0; });
+  const latestWeek = latestWeeks.length ? latestWeeks[latestWeeks.length - 1] : null;
+
+  const postable = buildPostableSummary(members, correctPerWeek, playedPerWeek, totalCorrect, totalPlayed, latestWeek);
+  const out = postable.map(function (line) { return [line]; });
+  out.push(['']);
+  out.push(['']);
+
+  const matrixHeaderRow = out.length + 1; // 1-indexed sheet row this will land on
+  const matrixHeader = ['Week', 'Games Final'].concat(members);
+  out.push(matrixHeader);
+  weeks.forEach(function (w) {
+    const row = [w, completedPerWeek[w]];
+    members.forEach(function (mem, m) {
+      row.push(formatRecord(correctPerWeek[m][w], playedPerWeek[m][w], completedPerWeek[w]));
+    });
+    out.push(row);
+  });
+  const totalCompleted = weeks.reduce(function (s, w) { return s + completedPerWeek[w]; }, 0);
+  const totalRowNumber = out.length + 1;
+  const totalRow = ['SEASON TOTAL', totalCompleted];
+  members.forEach(function (mem, m) {
+    totalRow.push(formatRecord(totalCorrect[m], totalPlayed[m], totalCompleted));
+  });
+  out.push(totalRow);
+
+  const width = out.reduce(function (w, r) { return Math.max(w, r.length); }, 1);
+  const padded = out.map(function (r) {
+    const copy = r.slice();
+    while (copy.length < width) copy.push('');
+    return copy;
+  });
+  sheet.getRange(1, 1, padded.length, width).setValues(padded);
+  sheet.getRange(matrixHeaderRow, 1, 1, width).setFontWeight('bold');
+  sheet.getRange(totalRowNumber, 1, 1, width).setFontWeight('bold');
+  sheet.autoResizeColumns(1, width);
+}
+
+function formatRecord(correct, played, weekHasCompletedGames) {
+  if (played > 0) return correct + '-' + (played - correct);
+  return weekHasCompletedGames > 0 ? '0-0' : '-';
+}
+
+/** Plain-text lines meant to be selected and pasted straight into a group chat. */
+function buildPostableSummary(members, correctPerWeek, playedPerWeek, totalCorrect, totalPlayed, latestWeek) {
+  const lines = [];
+  lines.push('🏈 WEEK ' + (latestWeek || '-') + ' RESULTS');
+  if (latestWeek === null) {
+    lines.push('No games completed yet.');
+  } else {
+    const weekStandings = members
+      .map(function (mem, m) { return { name: mem, correct: correctPerWeek[m][latestWeek], played: playedPerWeek[m][latestWeek] }; })
+      .filter(function (s) { return s.played > 0; })
+      .sort(function (a, b) { return b.correct - a.correct || (b.correct / b.played) - (a.correct / a.played); });
+    if (!weekStandings.length) {
+      lines.push('No member has picks in for completed games yet.');
+    }
+    weekStandings.forEach(function (s) {
+      const pct = s.played ? (100 * s.correct / s.played).toFixed(1) : '0.0';
+      lines.push(s.name + ': ' + s.correct + '-' + (s.played - s.correct) + ' (' + pct + '%)');
+    });
+  }
+
+  lines.push('');
+  lines.push('📊 SEASON STANDINGS' + (latestWeek ? ' (through Week ' + latestWeek + ')' : ''));
+  const seasonStandings = members
+    .map(function (mem, m) { return { name: mem, correct: totalCorrect[m], played: totalPlayed[m] }; })
+    .filter(function (s) { return s.played > 0; })
+    .sort(function (a, b) { return b.correct - a.correct || (b.correct / b.played) - (a.correct / a.played); });
+  if (!seasonStandings.length) {
+    lines.push('No completed games yet.');
+  }
+  seasonStandings.forEach(function (s, i) {
+    const pct = s.played ? (100 * s.correct / s.played).toFixed(1) : '0.0';
+    lines.push((i + 1) + '. ' + s.name + ' — ' + s.correct + '-' + (s.played - s.correct) + ' (' + pct + '%)');
+  });
+
+  return lines;
 }

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: Arial, sans-serif; padding: 14px; font-size: 13px; }
+    #status { margin-bottom: 8px; }
+    #progress { color: #666; font-size: 12px; }
+    button { margin-top: 12px; padding: 6px 14px; }
+  </style>
+</head>
+<body>
+  <div id="status">Fetching final <?= season ?> results from ESPN, from your browser&hellip;</div>
+  <div id="progress">Starting&hellip;</div>
+  <button id="closeBtn" style="display:none" onclick="google.script.host.close()">Close</button>
+
+  <script>
+    const SEASON = <?= season ?>;
+
+    async function fetchWeek(week) {
+      const url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard'
+        + '?dates=' + SEASON + '&seasontype=2&week=' + week;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json();
+    }
+
+    async function run() {
+      const results = [];
+      const problems = [];
+
+      for (let week = 1; week <= 18; week++) {
+        document.getElementById('progress').textContent = 'Week ' + week + ' of 18…';
+        try {
+          const data = await fetchWeek(week);
+          const events = data.events || [];
+          events.forEach(function (event) {
+            const comp = event.competitions[0];
+            if (!comp.status || !comp.status.type || !comp.status.type.completed) return;
+            const home = comp.competitors.find(function (c) { return c.homeAway === 'home'; });
+            const away = comp.competitors.find(function (c) { return c.homeAway === 'away'; });
+            const winner = comp.competitors.find(function (c) { return c.winner === true; });
+            if (!winner) return; // tie, or data not settled yet
+            results.push({
+              week: week,
+              awayName: away.team.displayName,
+              homeName: home.team.displayName,
+              winnerName: winner.team.displayName,
+            });
+          });
+        } catch (err) {
+          problems.push('Week ' + week + ': ' + err.message);
+        }
+      }
+
+      document.getElementById('status').textContent =
+        'Got ' + results.length + ' completed game(s). Saving to the sheet…';
+      document.getElementById('progress').textContent = '';
+
+      google.script.run
+        .withSuccessHandler(function (result) {
+          document.getElementById('status').textContent = result.message;
+          document.getElementById('closeBtn').style.display = 'inline-block';
+        })
+        .withFailureHandler(function (err) {
+          document.getElementById('status').textContent = 'Error saving results: ' + err.message;
+          document.getElementById('closeBtn').style.display = 'inline-block';
+        })
+        .receiveResultsFromClient(JSON.stringify(results), JSON.stringify(problems));
+    }
+
+    run();
+  </script>
+</body>
+</html>

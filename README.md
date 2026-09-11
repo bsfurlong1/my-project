@@ -73,6 +73,28 @@ sheet derives who each person effectively picked as the winner of each of the
 - **Tally** tab (read-only): once a member's picks are complete, they count
   toward the vote total for their picked team in each division. Shows, for
   each of the 8 divisions, which team got the most votes.
+- **Weekly Results** tab (read-only): scores every member's picks against
+  what actually happened, once real games are played. Updated by running
+  **NFL Picks > 3. Update Actual Results** (see Setup below) — do this
+  weekly, e.g. every Tuesday after Monday Night Football. The top of the
+  tab is a plain-text block meant to be selected and pasted straight into a
+  group chat:
+  ```
+  🏈 WEEK 3 RESULTS
+  Alice: 12-4 (75.0%)
+  Bob: 10-6 (62.5%)
+
+  📊 SEASON STANDINGS (through Week 3)
+  1. Alice — 34-14 (70.8%)
+  2. Bob — 30-18 (62.5%)
+  ```
+  Below that is the full week-by-week matrix (one row per week, one column
+  per member, `correct-wrong` per cell) plus a season-total row. A game only
+  counts once it's actually been played; an unplayed or unpicked game is
+  simply skipped (shown as `-`) rather than counted as wrong, and a member
+  doesn't need to have finished picking the whole season for their played
+  weeks to show up here — this tracks week-by-week, unlike Division
+  Winners/Tally which need a complete season of picks.
 - **Members** tab: hidden registry of name/email/tab used internally — no
   need to touch it.
 
@@ -84,14 +106,16 @@ re-run anything).
 1. Create a new Google Sheet.
 2. **Extensions > Apps Script**.
 3. Delete the default `Code.gs` content and paste in this repo's `Code.gs`.
-4. Add the dialog file: in the Apps Script editor, click the **+** next to
-   "Files" > **HTML**, name it exactly `FetchDialog` (Apps Script adds the
-   `.html` extension itself), and paste in this repo's `FetchDialog.html`.
+4. Add the dialog files: in the Apps Script editor, click the **+** next to
+   "Files" > **HTML** twice, naming them exactly `FetchDialog` and
+   `ResultsDialog` (Apps Script adds the `.html` extension itself), and
+   paste in this repo's `FetchDialog.html` and `ResultsDialog.html`
+   respectively.
 5. In the Apps Script editor, open **Project Settings** (gear icon) and
    check "Show `appsscript.json` manifest file in editor". Open that file
    and replace its contents with this repo's `appsscript.json`.
 6. Save, then reload the spreadsheet tab.
-7. **You (the spreadsheet owner) must run these two menu items** — members
+7. **You (the spreadsheet owner) must run these menu items** — members
    don't have permission to, since they create/lock tabs:
    - **1. Initialize (fetch schedule)** — opens a small dialog that fetches
      the schedule from ESPN *from your browser* (not Google's servers,
@@ -108,6 +132,9 @@ re-run anything).
    their own tab.
 9. Check the **Division Winners** and **Tally** tabs any time — they update
    as people pick.
+10. Once games start, run **NFL Picks > 3. Update Actual Results** weekly
+    (same browser-fetch dialog as Initialize) to score everyone's picks
+    against real outcomes on the **Weekly Results** tab.
 
 To change the season, edit the `SEASON` constant at the top of `Code.gs`
 before running Initialize.
