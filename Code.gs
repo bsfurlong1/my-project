@@ -25,6 +25,13 @@
  *      every Tuesday) to pull final scores from ESPN and refresh the
  *      "Weekly Results" tab - a postable per-week and season-to-date
  *      scoreboard of how each member's picks did against the real games.
+ *   5. Run "Fetch Betting Odds" (once, or re-run to backfill) to pull
+ *      moneyline odds from ESPN and build the "Gambling Analysis" tab - a
+ *      simulated $100 bankroll per member, betting equally on that week's
+ *      picks at their real moneyline. NOTE: ESPN's odds data isn't fully
+ *      verified against live data (this sandbox can't reach espn.com) - the
+ *      dialog reports how many games it found odds for, so check that
+ *      number after the first run.
  */
 
 const SEASON = 2026;
@@ -33,13 +40,18 @@ const DIVWIN_SHEET = 'Division Winners';
 const TALLY_SHEET = 'Tally';
 const MEMBERS_SHEET = 'Members';
 const WEEKLY_RESULTS_SHEET = 'Weekly Results';
+const GAMBLING_SHEET = 'Gambling Analysis';
 const WEATHER_HISTORY_YEARS = 5;
+const STARTING_BANKROLL = 100;
 
 // Master Schedule tab layout (read-only, no picking here): one header row,
-// then games starting row 2. Column 8 (Actual Winner) starts blank and is
-// filled in week by week via "Update Actual Results".
-const MASTER_HEADERS = ['Week', 'Date', 'Away', 'Home', 'Stadium Type', 'Avg Temp', 'Snow Chance', 'Actual Winner'];
+// then games starting row 2. Columns 8-10 (Actual Winner, Away ML, Home ML)
+// start blank and are filled in week by week via "Update Actual Results"
+// and "Fetch Betting Odds".
+const MASTER_HEADERS = ['Week', 'Date', 'Away', 'Home', 'Stadium Type', 'Avg Temp', 'Snow Chance', 'Actual Winner', 'Away ML', 'Home ML'];
 const COL_ACTUAL_WINNER = 8;
+const COL_AWAY_ML = 9;
+const COL_HOME_ML = 10;
 const FIRST_DATA_ROW = 2;
 
 // Member tab layout: a checkbox sits immediately next to each team name so
@@ -57,7 +69,7 @@ const COL_HOME = 6;
 const PICK_GREEN = '#b7e1cd';
 const INCOMPLETE_RED = '#f4cccc';
 
-const SYSTEM_SHEETS = [SCHEDULE_SHEET, DIVWIN_SHEET, TALLY_SHEET, MEMBERS_SHEET, WEEKLY_RESULTS_SHEET];
+const SYSTEM_SHEETS = [SCHEDULE_SHEET, DIVWIN_SHEET, TALLY_SHEET, MEMBERS_SHEET, WEEKLY_RESULTS_SHEET, GAMBLING_SHEET];
 
 const DIVISIONS = {
   'AFC East': ['Buffalo Bills', 'Miami Dolphins', 'New England Patriots', 'New York Jets'],
@@ -113,7 +125,8 @@ function onOpen() {
     .addItem('1. Initialize (fetch schedule)', 'showFetchScheduleDialog')
     .addItem('2. Add Member', 'addMemberPrompt')
     .addItem('3. Update Actual Results (weekly)', 'showUpdateResultsDialog')
-    .addItem('4. Recompute Results', 'recomputeResultsMenuAction')
+    .addItem('4. Fetch Betting Odds', 'showFetchOddsDialog')
+    .addItem('5. Recompute Results', 'recomputeResultsMenuAction')
     .addToUi();
 }
 
@@ -274,6 +287,69 @@ function receiveResultsFromClient(resultsJson, problemsJson) {
 }
 
 /**
+ * Same browser-fetch pattern again, this time for moneyline odds (used by
+ * the Gambling Analysis tab). Unlike the schedule/results shape, ESPN's odds
+ * data layout hasn't been verified against live data from this environment
+ * (no network access to espn.com here) - OddsDialog.html tries a couple of
+ * likely field shapes and reports how many games it actually found odds
+ * for, so coverage is visible rather than silently wrong.
+ */
+function showFetchOddsDialog() {
+  const template = HtmlService.createTemplateFromFile('OddsDialog');
+  template.season = SEASON;
+  const html = template.evaluate().setWidth(420).setHeight(220);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Fetching ' + SEASON + ' Betting Odds');
+}
+
+/** Called from OddsDialog.html with every game's moneyline odds it could find. */
+function receiveOddsFromClient(oddsJson, notFound, problemsJson) {
+  const odds = JSON.parse(oddsJson);
+  const problems = JSON.parse(problemsJson || '[]');
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const master = ss.getSheetByName(SCHEDULE_SHEET);
+  if (!master) return { message: 'Run "Initialize" first.' };
+
+  try {
+    const numGames = master.getLastRow() - (FIRST_DATA_ROW - 1);
+    if (numGames <= 0) return { message: 'Run "Initialize" first - no games loaded yet.' };
+
+    master.getRange(1, COL_AWAY_ML).setValue('Away ML').setFontWeight('bold');
+    master.getRange(1, COL_HOME_ML).setValue('Home ML').setFontWeight('bold');
+    const scheduleRows = master.getRange(FIRST_DATA_ROW, 1, numGames, 4).getValues(); // week, date, away, home
+    const rowForKey = {};
+    scheduleRows.forEach(function (r, i) {
+      rowForKey[r[0] + '|' + r[2] + '|' + r[3]] = FIRST_DATA_ROW + i;
+    });
+
+    let updated = 0;
+    odds.forEach(function (o) {
+      const row = rowForKey[o.week + '|' + o.awayName + '|' + o.homeName];
+      if (!row) return;
+      master.getRange(row, COL_AWAY_ML).setValue(o.awayMoneyLine);
+      master.getRange(row, COL_HOME_ML).setValue(o.homeMoneyLine);
+      updated++;
+    });
+
+    ensureRecomputeTrigger();
+    computeResults();
+
+    let msg = 'Found moneyline odds for ' + updated + ' of ' + (updated + notFound) + ' games checked.';
+    if (notFound > 0) {
+      msg += '\n\n' + notFound + ' game(s) had no odds data found and will be skipped in the ' +
+        'Gambling Analysis bankroll simulation for those weeks.';
+    }
+    if (problems.length) {
+      msg += '\n\n(' + problems.length + ' week(s) had issues fetching from your browser - the rest loaded fine.)';
+    }
+    return { message: msg };
+  } catch (err) {
+    return { message: 'Fetch succeeded, but saving failed: ' + err.message +
+      '\n\n(Only the spreadsheet owner can update odds.)' };
+  }
+}
+
+/**
  * For each game, returns { stadiumType, tempStr, snowStr }. Weather is the
  * historical average temperature and snow probability for that stadium's
  * location on that calendar date, pulled once per unique location and reused
@@ -375,7 +451,7 @@ function buildScheduleSheet(games, weather) {
   sheet.getRange(1, 1, 1, MASTER_HEADERS.length).setValues([MASTER_HEADERS]).setFontWeight('bold');
   const rows = games.map(function (g, i) {
     const w = weather[i];
-    return [g.week, formatGameDate(g.date), g.awayName, g.homeName, w.stadiumType, w.tempStr, w.snowStr, ''];
+    return [g.week, formatGameDate(g.date), g.awayName, g.homeName, w.stadiumType, w.tempStr, w.snowStr, '', '', ''];
   });
   if (rows.length) {
     sheet.getRange(FIRST_DATA_ROW, 1, rows.length, MASTER_HEADERS.length).setValues(rows);
@@ -586,9 +662,11 @@ function computeResults() {
   const divSheet = getOrCreateSheet(DIVWIN_SHEET);
   const tallySheet = getOrCreateSheet(TALLY_SHEET);
   const weeklySheet = getOrCreateSheet(WEEKLY_RESULTS_SHEET);
+  const gamblingSheet = getOrCreateSheet(GAMBLING_SHEET);
   divSheet.clear();
   tallySheet.clear();
   weeklySheet.clear();
+  gamblingSheet.clear();
 
   if (!master) return;
   const numGames = master.getLastRow() - (FIRST_DATA_ROW - 1);
@@ -597,9 +675,11 @@ function computeResults() {
     divSheet.getRange(1, 1).setValue('Add members and picks to see results.');
     tallySheet.getRange(1, 1).setValue('Add members and picks to see results.');
     weeklySheet.getRange(1, 1).setValue('Add members and picks to see results.');
+    gamblingSheet.getRange(1, 1).setValue('Add members and picks to see results.');
     protectReadOnlySheet(divSheet);
     protectReadOnlySheet(tallySheet);
     protectReadOnlySheet(weeklySheet);
+    protectReadOnlySheet(gamblingSheet);
     return;
   }
 
@@ -607,6 +687,10 @@ function computeResults() {
   const masterAwayHome = master.getRange(FIRST_DATA_ROW, 3, numGames, 2).getValues();
   const actualWinners = master.getRange(FIRST_DATA_ROW, COL_ACTUAL_WINNER, numGames, 1).getValues()
     .map(function (r) { return r[0] || null; });
+  const awayMoneyLines = master.getRange(FIRST_DATA_ROW, COL_AWAY_ML, numGames, 1).getValues()
+    .map(function (r) { return typeof r[0] === 'number' ? r[0] : null; });
+  const homeMoneyLines = master.getRange(FIRST_DATA_ROW, COL_HOME_ML, numGames, 1).getValues()
+    .map(function (r) { return typeof r[0] === 'number' ? r[0] : null; });
   const members = memberRecords.map(function (m) { return m.name; });
   const winCounts = members.map(function () { return {}; });
   const pickedCounts = members.map(function () { return 0; });
@@ -645,9 +729,11 @@ function computeResults() {
   writeDivisionWinners(divSheet, members, complete, pickedCounts, numGames, results, divNames);
   writeTally(tallySheet, members, complete, results, divNames);
   writeWeeklyResults(weeklySheet, members, picksByGame, masterWeeks, actualWinners, numGames);
+  writeGamblingAnalysis(gamblingSheet, members, picksByGame, masterWeeks, actualWinners, masterAwayHome, awayMoneyLines, homeMoneyLines);
   protectReadOnlySheet(divSheet);
   protectReadOnlySheet(tallySheet);
   protectReadOnlySheet(weeklySheet);
+  protectReadOnlySheet(gamblingSheet);
 }
 
 const ALL_TEAMS = Object.keys(DIVISIONS).reduce(function (acc, div) { return acc.concat(DIVISIONS[div]); }, []);
@@ -1000,5 +1086,126 @@ function buildPostableSummary(members, correctPerWeek, playedPerWeek, totalCorre
     lines.push((i + 1) + '. ' + s.name + ' — ' + s.correct + '-' + (s.played - s.correct) + ' (' + pct + '%)');
   });
 
+  return lines;
+}
+
+/**
+ * Simulates each member starting Week 1 with STARTING_BANKROLL, betting it
+ * equally across that week's picked games (moneyline), then each later week
+ * re-betting their ENTIRE current bankroll equally across that week's picks
+ * - so a bad week compounds and an empty bankroll stays empty. Writes a
+ * postable standings block followed by a week-by-week bankroll matrix.
+ *
+ * A week only resolves once every one of that week's stakeable games (picked
+ * AND has moneyline odds) has a known actual result - all of a week's bets
+ * are placed before any outcome is known, so the next week's stake can't be
+ * sized until this one is fully settled. Until then that week, and every
+ * week after it, shows as "pending". A picked game with no odds data is
+ * simply excluded from that week's stake split (see header note on odds
+ * coverage); a week with no stakeable picks leaves the bankroll unchanged.
+ */
+function writeGamblingAnalysis(sheet, members, picksByGame, masterWeeks, actualWinners, masterAwayHome, awayMoneyLines, homeMoneyLines) {
+  const weeks = [];
+  masterWeeks.forEach(function (w) { if (weeks.indexOf(w) === -1) weeks.push(w); });
+  weeks.sort(function (a, b) { return a - b; });
+
+  const perMemberWeeks = members.map(function (mem, m) {
+    return simulateBankroll(picksByGame[m], masterWeeks, actualWinners, masterAwayHome, awayMoneyLines, homeMoneyLines, weeks);
+  });
+
+  const postable = buildBankrollSummary(members, perMemberWeeks, weeks);
+  const out = postable.map(function (line) { return [line]; });
+  out.push(['']);
+  out.push(['']);
+
+  const matrixHeaderRow = out.length + 1;
+  out.push(['Week'].concat(members));
+  weeks.forEach(function (w) {
+    const row = [w];
+    perMemberWeeks.forEach(function (weekMap) {
+      const entry = weekMap[w];
+      row.push(entry.pending ? 'pending' : '$' + entry.bankroll.toFixed(2));
+    });
+    out.push(row);
+  });
+
+  const width = out.reduce(function (w, r) { return Math.max(w, r.length); }, 1);
+  const padded = out.map(function (r) {
+    const copy = r.slice();
+    while (copy.length < width) copy.push('');
+    return copy;
+  });
+  sheet.getRange(1, 1, padded.length, width).setValues(padded);
+  sheet.getRange(matrixHeaderRow, 1, 1, width).setFontWeight('bold');
+  sheet.autoResizeColumns(1, width);
+}
+
+/** Profit per $1 staked if a bet at this American moneyline wins. */
+function moneylinePayoutMultiplier(moneyLine) {
+  return moneyLine > 0 ? moneyLine / 100 : 100 / Math.abs(moneyLine);
+}
+
+/** Returns { week: { bankroll, pending } } for one member across all weeks. */
+function simulateBankroll(picks, masterWeeks, actualWinners, masterAwayHome, awayMoneyLines, homeMoneyLines, weeks) {
+  let bankroll = STARTING_BANKROLL;
+  let stillPending = false;
+  const perWeek = {};
+
+  weeks.forEach(function (week) {
+    if (stillPending) { perWeek[week] = { bankroll: null, pending: true }; return; }
+
+    const stakeableGames = [];
+    for (let g = 0; g < masterWeeks.length; g++) {
+      if (masterWeeks[g] !== week || !picks[g]) continue;
+      const isAway = picks[g] === masterAwayHome[g][0];
+      const moneyLine = isAway ? awayMoneyLines[g] : homeMoneyLines[g];
+      if (typeof moneyLine !== 'number') continue; // no odds data - excluded from this week's stake split
+      stakeableGames.push(g);
+    }
+
+    if (!stakeableGames.length) {
+      perWeek[week] = { bankroll: bankroll, pending: false }; // nothing to bet on - unchanged
+      return;
+    }
+
+    const allDecided = stakeableGames.every(function (g) { return !!actualWinners[g]; });
+    if (!allDecided) {
+      perWeek[week] = { bankroll: null, pending: true };
+      stillPending = true;
+      return;
+    }
+
+    const stake = bankroll / stakeableGames.length;
+    let endBankroll = 0;
+    stakeableGames.forEach(function (g) {
+      if (actualWinners[g] !== picks[g]) return; // bet lost, stake contributes 0
+      const isAway = picks[g] === masterAwayHome[g][0];
+      const moneyLine = isAway ? awayMoneyLines[g] : homeMoneyLines[g];
+      endBankroll += stake * (1 + moneylinePayoutMultiplier(moneyLine));
+    });
+    bankroll = endBankroll;
+    perWeek[week] = { bankroll: bankroll, pending: false };
+  });
+
+  return perWeek;
+}
+
+/** Plain-text standings using each member's most recently resolved bankroll. */
+function buildBankrollSummary(members, perMemberWeeks, weeks) {
+  const standings = members.map(function (mem, m) {
+    let latest = STARTING_BANKROLL;
+    for (let i = 0; i < weeks.length; i++) {
+      const entry = perMemberWeeks[m][weeks[i]];
+      if (entry.pending) break;
+      latest = entry.bankroll;
+    }
+    return { name: mem, bankroll: latest };
+  });
+  standings.sort(function (a, b) { return b.bankroll - a.bankroll; });
+
+  const lines = ['💰 BANKROLL STANDINGS (started at $' + STARTING_BANKROLL.toFixed(2) + ')'];
+  standings.forEach(function (s, i) {
+    lines.push((i + 1) + '. ' + s.name + ' — $' + s.bankroll.toFixed(2));
+  });
   return lines;
 }

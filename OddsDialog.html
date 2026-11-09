@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: Arial, sans-serif; padding: 14px; font-size: 13px; }
+    #status { margin-bottom: 8px; }
+    #progress { color: #666; font-size: 12px; }
+    button { margin-top: 12px; padding: 6px 14px; }
+  </style>
+</head>
+<body>
+  <div id="status">Fetching <?= season ?> betting odds from ESPN, from your browser&hellip;</div>
+  <div id="progress">Starting&hellip;</div>
+  <button id="closeBtn" style="display:none" onclick="google.script.host.close()">Close</button>
+
+  <script>
+    const SEASON = <?= season ?>;
+
+    // ESPN's odds field shape isn't confirmed for this project - try a
+    // couple of known patterns from their public API rather than assuming one.
+    function extractMoneylines(oddsArray) {
+      if (!oddsArray || !oddsArray.length) return null;
+      for (let i = 0; i < oddsArray.length; i++) {
+        const entry = oddsArray[i];
+        if (entry.awayTeamOdds && entry.homeTeamOdds &&
+            typeof entry.awayTeamOdds.moneyLine === 'number' &&
+            typeof entry.homeTeamOdds.moneyLine === 'number') {
+          return { away: entry.awayTeamOdds.moneyLine, home: entry.homeTeamOdds.moneyLine };
+        }
+        if (typeof entry.awayMoneyLine === 'number' && typeof entry.homeMoneyLine === 'number') {
+          return { away: entry.awayMoneyLine, home: entry.homeMoneyLine };
+        }
+      }
+      return null;
+    }
+
+    async function fetchWeek(week) {
+      const url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard'
+        + '?dates=' + SEASON + '&seasontype=2&week=' + week;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json();
+    }
+
+    async function fetchSummaryOdds(eventId) {
+      const url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=' + eventId;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      return extractMoneylines(data.pickcenter);
+    }
+
+    async function run() {
+      const odds = [];
+      const problems = [];
+      const needsFallback = []; // games the scoreboard pass didn't have odds for
+
+      for (let week = 1; week <= 18; week++) {
+        document.getElementById('progress').textContent = 'Week ' + week + ' of 18 (scoreboard)…';
+        try {
+          const data = await fetchWeek(week);
+          const events = data.events || [];
+          events.forEach(function (event) {
+            const comp = event.competitions[0];
+            const home = comp.competitors.find(function (c) { return c.homeAway === 'home'; });
+            const away = comp.competitors.find(function (c) { return c.homeAway === 'away'; });
+            const ml = extractMoneylines(comp.odds);
+            if (ml) {
+              odds.push({
+                week: week, awayName: away.team.displayName, homeName: home.team.displayName,
+                awayMoneyLine: ml.away, homeMoneyLine: ml.home,
+              });
+            } else {
+              needsFallback.push({ week: week, awayName: away.team.displayName, homeName: home.team.displayName, eventId: event.id });
+            }
+          });
+        } catch (err) {
+          problems.push('Week ' + week + ' (scoreboard): ' + err.message);
+        }
+      }
+
+      // Fallback: per-game summary endpoint for anything the scoreboard pass missed.
+      for (let i = 0; i < needsFallback.length; i++) {
+        const g = needsFallback[i];
+        document.getElementById('progress').textContent =
+          'Checking game ' + (i + 1) + ' of ' + needsFallback.length + ' individually…';
+        try {
+          const ml = await fetchSummaryOdds(g.eventId);
+          if (ml) {
+            odds.push({
+              week: g.week, awayName: g.awayName, homeName: g.homeName,
+              awayMoneyLine: ml.away, homeMoneyLine: ml.home,
+            });
+          }
+        } catch (err) {
+          problems.push('Event ' + g.eventId + ': ' + err.message);
+        }
+      }
+
+      const foundKeys = {};
+      odds.forEach(function (o) { foundKeys[o.week + '|' + o.awayName + '|' + o.homeName] = true; });
+      const missing = needsFallback.filter(function (g) {
+        return !foundKeys[g.week + '|' + g.awayName + '|' + g.homeName];
+      }).length;
+
+      document.getElementById('status').textContent =
+        'Found odds for ' + odds.length + ' game(s). Saving to the sheet…';
+      document.getElementById('progress').textContent = '';
+
+      google.script.run
+        .withSuccessHandler(function (result) {
+          document.getElementById('status').textContent = result.message;
+          document.getElementById('closeBtn').style.display = 'inline-block';
+        })
+        .withFailureHandler(function (err) {
+          document.getElementById('status').textContent = 'Error saving odds: ' + err.message;
+          document.getElementById('closeBtn').style.display = 'inline-block';
+        })
+        .receiveOddsFromClient(JSON.stringify(odds), missing, JSON.stringify(problems));
+    }
+
+    run();
+  </script>
+</body>
+</html>

@@ -95,6 +95,35 @@ sheet derives who each person effectively picked as the winner of each of the
   doesn't need to have finished picking the whole season for their played
   weeks to show up here — this tracks week-by-week, unlike Division
   Winners/Tally which need a complete season of picks.
+- **Gambling Analysis** tab (read-only): a simulated $100-per-member
+  bankroll, run against real moneyline odds. Each member starts Week 1 with
+  $100, split equally as a moneyline bet across that week's picks; every
+  week after, they re-bet their **entire current bankroll**, split equally
+  across that week's picks — so a bad week compounds, and once a bankroll
+  hits $0 it stays at $0 (busted) for the rest of the season. Updated by
+  running **NFL Picks > 4. Fetch Betting Odds** (see Setup below).
+
+  Leads with a postable standings block, then a week-by-week bankroll
+  matrix:
+  ```
+  💰 BANKROLL STANDINGS (started at $100.00)
+  1. Alice — $212.40
+  2. Bob — $0.00
+  ```
+  A week shows `pending` until every one of that week's bet-eligible games
+  (picked, with known odds) has an actual result — all of a week's bets are
+  placed before any outcome is known, so next week's bet size can't be set
+  until this week is fully settled. A picked game with no odds data found is
+  simply left out of that week's bet split; a week with nothing to bet on
+  leaves the bankroll unchanged.
+
+  **Caveat on the odds data:** ESPN's betting-odds API shape wasn't
+  verifiable while building this (no network access to espn.com from this
+  environment), unlike the schedule/score endpoints, which were. The fetch
+  dialog tries a couple of known ESPN field layouts and reports exactly how
+  many games it found odds for — check that number the first time you run
+  it. If it's low or zero, ESPN's actual odds format differs from what's
+  coded here and the extraction logic needs adjusting against real data.
 - **Members** tab: hidden registry of name/email/tab used internally — no
   need to touch it.
 
@@ -107,10 +136,10 @@ re-run anything).
 2. **Extensions > Apps Script**.
 3. Delete the default `Code.gs` content and paste in this repo's `Code.gs`.
 4. Add the dialog files: in the Apps Script editor, click the **+** next to
-   "Files" > **HTML** twice, naming them exactly `FetchDialog` and
-   `ResultsDialog` (Apps Script adds the `.html` extension itself), and
-   paste in this repo's `FetchDialog.html` and `ResultsDialog.html`
-   respectively.
+   "Files" > **HTML** three times, naming them exactly `FetchDialog`,
+   `ResultsDialog`, and `OddsDialog` (Apps Script adds the `.html`
+   extension itself), and paste in this repo's `FetchDialog.html`,
+   `ResultsDialog.html`, and `OddsDialog.html` respectively.
 5. In the Apps Script editor, open **Project Settings** (gear icon) and
    check "Show `appsscript.json` manifest file in editor". Open that file
    and replace its contents with this repo's `appsscript.json`.
@@ -135,6 +164,11 @@ re-run anything).
 10. Once games start, run **NFL Picks > 3. Update Actual Results** weekly
     (same browser-fetch dialog as Initialize) to score everyone's picks
     against real outcomes on the **Weekly Results** tab.
+11. Run **NFL Picks > 4. Fetch Betting Odds** (once near the start of the
+    season is enough, since real moneylines don't change retroactively; you
+    can re-run it any time to backfill games it missed) to build the
+    **Gambling Analysis** tab. Check the "Found moneyline odds for X of Y
+    games" message it reports — see the caveat above.
 
 To change the season, edit the `SEASON` constant at the top of `Code.gs`
 before running Initialize.
