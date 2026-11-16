@@ -5,19 +5,71 @@
  * regular-season NFL game, and this derives who each person picked to win
  * each of the 8 divisions, then tallies votes across the whole league.
  *
+ * Each member gets their own tab, edit-protected so only they (and the
+ * spreadsheet owner) can change it. Note: Google Sheets has no way to hide
+ * one tab from specific viewers within a single shared file - protection
+ * only controls who can EDIT a tab, not who can see it. Anyone with access
+ * to this spreadsheet can see every member's tab; they just can't edit
+ * anyone else's.
+ *
  * Setup (run once from the "NFL Picks" menu after opening the sheet):
- *   1. Initialize (fetch schedule)
- *   2. Add Member  (repeat once per league member)
- *   3. Share the sheet with the league; everyone fills in their own column
- *      on the "Schedule" tab. "Division Winners" and "Tally" update
+ *   1. Initialize (fetch schedule) - builds the read-only master Schedule
+ *      tab with stadium type and historical average weather for each game.
+ *   2. Add Member (repeat once per league member) - creates that member's
+ *      own picks tab, copied from the master schedule, and locks it so only
+ *      that member can edit it.
+ *   3. Share the spreadsheet (Editor access) with the league. Each member
+ *      checks boxes on their own tab. "Division Winners" and "Tally" update
  *      automatically as picks come in.
+ *   4. Once games are underway, run "Update Actual Results" (weekly, e.g.
+ *      every Tuesday) to pull final scores from ESPN and refresh the
+ *      "Weekly Results" tab - a postable per-week and season-to-date
+ *      scoreboard of how each member's picks did against the real games.
+ *   5. Run "Fetch Betting Odds" (once, or re-run to backfill) to pull
+ *      moneyline odds from ESPN and build the "Gambling Analysis" tab - a
+ *      simulated $100 bankroll per member, betting equally on that week's
+ *      picks at their real moneyline. NOTE: ESPN's odds data isn't fully
+ *      verified against live data (this sandbox can't reach espn.com) - the
+ *      dialog reports how many games it found odds for, so check that
+ *      number after the first run.
  */
 
 const SEASON = 2026;
 const SCHEDULE_SHEET = 'Schedule';
 const DIVWIN_SHEET = 'Division Winners';
 const TALLY_SHEET = 'Tally';
-const FIRST_MEMBER_COL = 5; // A=Week, B=Date, C=Away, D=Home, E.. = members
+const MEMBERS_SHEET = 'Members';
+const WEEKLY_RESULTS_SHEET = 'Weekly Results';
+const GAMBLING_SHEET = 'Gambling Analysis';
+const WEATHER_HISTORY_YEARS = 5;
+const STARTING_BANKROLL = 100;
+
+// Master Schedule tab layout (read-only, no picking here): one header row,
+// then games starting row 2. Columns 8-10 (Actual Winner, Away ML, Home ML)
+// start blank and are filled in week by week via "Update Actual Results"
+// and "Fetch Betting Odds".
+const MASTER_HEADERS = ['Week', 'Date', 'Away', 'Home', 'Stadium Type', 'Avg Temp', 'Snow Chance', 'Actual Winner', 'Away ML', 'Home ML'];
+const COL_ACTUAL_WINNER = 8;
+const COL_AWAY_ML = 9;
+const COL_HOME_ML = 10;
+const FIRST_DATA_ROW = 2;
+
+// Member tab layout: a checkbox sits immediately next to each team name so
+// picking is a single click right on the matchup, and conditional formatting
+// turns that team's name green when its checkbox is checked. Row 1 is a
+// live status banner ("all picked" / "N left"), row 2 is the header, and
+// game rows start at MEMBER_FIRST_DATA_ROW.
+const MEMBER_HEADERS = ['Week', 'Date', '✓', 'Away', '✓', 'Home', 'Stadium Type', 'Avg Temp', 'Snow Chance'];
+const MEMBER_HEADER_ROW = FIRST_DATA_ROW; // row 2
+const MEMBER_FIRST_DATA_ROW = FIRST_DATA_ROW + 1; // row 3
+const COL_PICK_AWAY = 3;
+const COL_AWAY = 4;
+const COL_PICK_HOME = 5;
+const COL_HOME = 6;
+const PICK_GREEN = '#b7e1cd';
+const INCOMPLETE_RED = '#f4cccc';
+
+const SYSTEM_SHEETS = [SCHEDULE_SHEET, DIVWIN_SHEET, TALLY_SHEET, MEMBERS_SHEET, WEEKLY_RESULTS_SHEET, GAMBLING_SHEET];
 
 const DIVISIONS = {
   'AFC East': ['Buffalo Bills', 'Miami Dolphins', 'New England Patriots', 'New York Jets'],
@@ -30,59 +82,363 @@ const DIVISIONS = {
   'NFC West': ['Arizona Cardinals', 'Los Angeles Rams', 'San Francisco 49ers', 'Seattle Seahawks'],
 };
 
+// type: 'Dome' (fully enclosed, weather irrelevant), 'Retractable Roof'
+// (roof can open, so outdoor conditions still shown), or 'Open Air'.
+const STADIUMS = {
+  'Buffalo Bills': { lat: 42.7738, lon: -78.7870, type: 'Open Air' },
+  'Miami Dolphins': { lat: 25.9580, lon: -80.2389, type: 'Open Air' },
+  'New England Patriots': { lat: 42.0909, lon: -71.2643, type: 'Open Air' },
+  'New York Jets': { lat: 40.8135, lon: -74.0745, type: 'Open Air' },
+  'Baltimore Ravens': { lat: 39.2780, lon: -76.6227, type: 'Open Air' },
+  'Cincinnati Bengals': { lat: 39.0955, lon: -84.5160, type: 'Open Air' },
+  'Cleveland Browns': { lat: 41.5061, lon: -81.6995, type: 'Open Air' },
+  'Pittsburgh Steelers': { lat: 40.4468, lon: -80.0158, type: 'Open Air' },
+  'Houston Texans': { lat: 29.6847, lon: -95.4107, type: 'Retractable Roof' },
+  'Indianapolis Colts': { lat: 39.7601, lon: -86.1639, type: 'Retractable Roof' },
+  'Jacksonville Jaguars': { lat: 30.3239, lon: -81.6373, type: 'Open Air' },
+  'Tennessee Titans': { lat: 36.1665, lon: -86.7713, type: 'Open Air' },
+  'Denver Broncos': { lat: 39.7439, lon: -105.0201, type: 'Open Air' },
+  'Kansas City Chiefs': { lat: 39.0489, lon: -94.4839, type: 'Open Air' },
+  'Las Vegas Raiders': { lat: 36.0909, lon: -115.1833, type: 'Dome' },
+  'Los Angeles Chargers': { lat: 33.9535, lon: -118.3392, type: 'Open Air' },
+  'Dallas Cowboys': { lat: 32.7473, lon: -97.0945, type: 'Retractable Roof' },
+  'New York Giants': { lat: 40.8135, lon: -74.0745, type: 'Open Air' },
+  'Philadelphia Eagles': { lat: 39.9008, lon: -75.1675, type: 'Open Air' },
+  'Washington Commanders': { lat: 38.9077, lon: -76.8645, type: 'Open Air' },
+  'Chicago Bears': { lat: 41.8623, lon: -87.6167, type: 'Open Air' },
+  'Detroit Lions': { lat: 42.3400, lon: -83.0456, type: 'Dome' },
+  'Green Bay Packers': { lat: 44.5013, lon: -88.0622, type: 'Open Air' },
+  'Minnesota Vikings': { lat: 44.9738, lon: -93.2581, type: 'Dome' },
+  'Atlanta Falcons': { lat: 33.7554, lon: -84.4008, type: 'Retractable Roof' },
+  'Carolina Panthers': { lat: 35.2258, lon: -80.8528, type: 'Open Air' },
+  'New Orleans Saints': { lat: 29.9511, lon: -90.0812, type: 'Dome' },
+  'Tampa Bay Buccaneers': { lat: 27.9759, lon: -82.5033, type: 'Open Air' },
+  'Arizona Cardinals': { lat: 33.5276, lon: -112.2626, type: 'Retractable Roof' },
+  'Los Angeles Rams': { lat: 33.9535, lon: -118.3392, type: 'Open Air' },
+  'San Francisco 49ers': { lat: 37.4032, lon: -121.9698, type: 'Open Air' },
+  'Seattle Seahawks': { lat: 47.5952, lon: -122.3316, type: 'Open Air' },
+};
+
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('NFL Picks')
-    .addItem('1. Initialize (fetch schedule)', 'initialize')
+    .addItem('1. Initialize (fetch schedule)', 'showFetchScheduleDialog')
     .addItem('2. Add Member', 'addMemberPrompt')
-    .addItem('3. Recompute Results', 'computeResults')
+    .addItem('3. Update Actual Results (weekly)', 'showUpdateResultsDialog')
+    .addItem('4. Fetch Betting Odds', 'showFetchOddsDialog')
+    .addItem('5. Recompute Results', 'recomputeResultsMenuAction')
     .addToUi();
 }
 
-/** Simple trigger: auto-recompute whenever someone fills in a pick. */
+/**
+ * Simple trigger (fires instantly, runs as whoever is editing): only handles
+ * the Away/Home checkbox toggle on the editor's own tab, which they always
+ * have permission to edit. Writing results to the protected Division
+ * Winners/Tally tabs needs owner authority - see recomputeOnEdit below.
+ */
 function onEdit(e) {
   const sheet = e.range.getSheet();
-  if (sheet.getName() !== SCHEDULE_SHEET) return;
-  if (e.range.getColumn() < FIRST_MEMBER_COL) return;
-  if (e.range.getRow() < 2) return;
+  if (SYSTEM_SHEETS.indexOf(sheet.getName()) !== -1) return;
+  if (e.range.getRow() < MEMBER_FIRST_DATA_ROW) return;
+  enforceSingleSelect(sheet, e.range);
+}
+
+/**
+ * Installable trigger (must be registered once - done automatically during
+ * Initialize/Add Member) that always runs with the authority of whoever
+ * installed it (the spreadsheet owner), so it can write to the protected
+ * Division Winners/Tally tabs no matter which member made the edit.
+ */
+function recomputeOnEdit(e) {
+  const sheet = e.range.getSheet();
+  if (SYSTEM_SHEETS.indexOf(sheet.getName()) !== -1) return;
+  if (e.range.getRow() < MEMBER_FIRST_DATA_ROW) return;
   computeResults();
 }
 
-function initialize() {
-  const games = fetchSchedule();
-  buildScheduleSheet(games);
-  computeResults();
-  SpreadsheetApp.getUi().alert(
-    'Loaded ' + games.length + ' games for the ' + SEASON + ' season.\n' +
-    'Now use "NFL Picks > Add Member" for each person in your league.'
-  );
-}
-
-function fetchSchedule() {
-  const games = [];
-  for (let week = 1; week <= 18; week++) {
-    const url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard' +
-      '?dates=' + SEASON + '&seasontype=2&week=' + week;
-    const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-    if (resp.getResponseCode() !== 200) continue;
-    const data = JSON.parse(resp.getContentText());
-    (data.events || []).forEach(function (event) {
-      const comp = event.competitions[0];
-      const home = comp.competitors.filter(function (c) { return c.homeAway === 'home'; })[0];
-      const away = comp.competitors.filter(function (c) { return c.homeAway === 'away'; })[0];
-      games.push({
-        week: week,
-        date: event.date,
-        awayName: away.team.displayName,
-        homeName: home.team.displayName,
-      });
-    });
-    Utilities.sleep(150);
+function ensureRecomputeTrigger() {
+  const exists = ScriptApp.getProjectTriggers().some(function (t) {
+    return t.getHandlerFunction() === 'recomputeOnEdit' && t.getEventType() === ScriptApp.EventType.ON_EDIT;
+  });
+  if (!exists) {
+    ScriptApp.newTrigger('recomputeOnEdit').forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet()).onEdit().create();
   }
-  return games;
 }
 
-function buildScheduleSheet(games) {
+/** A game pick is two checkbox columns (Away/Home); checking one unchecks the other. */
+function enforceSingleSelect(sheet, range) {
+  const startRow = range.getRow();
+  const startCol = range.getColumn();
+  const values = range.getValues();
+  for (let i = 0; i < values.length; i++) {
+    for (let j = 0; j < values[i].length; j++) {
+      if (values[i][j] !== true) continue;
+      const col = startCol + j;
+      if (col !== COL_PICK_AWAY && col !== COL_PICK_HOME) continue;
+      const siblingCol = col === COL_PICK_AWAY ? COL_PICK_HOME : COL_PICK_AWAY;
+      const siblingCell = sheet.getRange(startRow + i, siblingCol);
+      if (siblingCell.getValue() === true) siblingCell.setValue(false);
+    }
+  }
+}
+
+/**
+ * ESPN's schedule API blocks requests that come from Google's own server IPs
+ * (Apps Script's UrlFetchApp runs on Google Cloud), returning a WAF "Access
+ * Denied" page instead of data. So instead of fetching server-side, this
+ * opens a small dialog that fetches the schedule from the user's own browser
+ * (a normal residential/office IP, not blocked) and sends the results back.
+ */
+function showFetchScheduleDialog() {
+  const template = HtmlService.createTemplateFromFile('FetchDialog');
+  template.season = SEASON;
+  const html = template.evaluate().setWidth(420).setHeight(220);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Fetching ' + SEASON + ' Schedule');
+}
+
+/** Called from FetchDialog.html once the browser has fetched all 18 weeks. */
+function receiveScheduleFromClient(gamesJson, problemsJson) {
+  const games = JSON.parse(gamesJson);
+  const problems = JSON.parse(problemsJson || '[]');
+
+  if (!games.length) {
+    return {
+      message: 'No games were loaded.\n' +
+        (problems.slice(0, 5).join('\n') || 'Unknown error.') +
+        (problems.length > 5 ? '\n(+' + (problems.length - 5) + ' more)' : ''),
+    };
+  }
+
+  try {
+    const weather = computeStadiumAndWeather(games);
+    buildScheduleSheet(games, weather);
+    ensureRecomputeTrigger();
+    computeResults();
+  } catch (err) {
+    return { message: 'Fetched ' + games.length + ' games, but saving failed: ' + err.message +
+      '\n\n(Only the spreadsheet owner can run Initialize.)' };
+  }
+
+  let msg = 'Loaded ' + games.length + ' games for the ' + SEASON + ' season, ' +
+    'with stadium type and historical average weather.\n' +
+    'Now use "NFL Picks > Add Member" for each person in your league.';
+  if (problems.length) {
+    msg += '\n\n(' + problems.length + ' week(s) had issues fetching from your browser - the rest loaded fine.)';
+  }
+  return { message: msg };
+}
+
+/**
+ * Same browser-fetch trick as showFetchScheduleDialog, but for final scores
+ * instead of the schedule - re-run this weekly as games complete.
+ */
+function showUpdateResultsDialog() {
+  const template = HtmlService.createTemplateFromFile('ResultsDialog');
+  template.season = SEASON;
+  const html = template.evaluate().setWidth(420).setHeight(220);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Fetching ' + SEASON + ' Results');
+}
+
+/**
+ * Called from ResultsDialog.html with every completed game's winner. Matches
+ * each one to its row in the master Schedule (by week + matchup, since fetch
+ * order isn't guaranteed to match) and records it in the Actual Winner
+ * column; unplayed games are left untouched.
+ */
+function receiveResultsFromClient(resultsJson, problemsJson) {
+  const results = JSON.parse(resultsJson);
+  const problems = JSON.parse(problemsJson || '[]');
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const master = ss.getSheetByName(SCHEDULE_SHEET);
+  if (!master) return { message: 'Run "Initialize" first.' };
+
+  try {
+    const numGames = master.getLastRow() - (FIRST_DATA_ROW - 1);
+    if (numGames <= 0) return { message: 'Run "Initialize" first - no games loaded yet.' };
+
+    master.getRange(1, COL_ACTUAL_WINNER).setValue('Actual Winner').setFontWeight('bold');
+    const scheduleRows = master.getRange(FIRST_DATA_ROW, 1, numGames, 4).getValues(); // week, date, away, home
+    const rowForKey = {};
+    scheduleRows.forEach(function (r, i) {
+      rowForKey[r[0] + '|' + r[2] + '|' + r[3]] = FIRST_DATA_ROW + i;
+    });
+
+    let updated = 0;
+    results.forEach(function (r) {
+      const row = rowForKey[r.week + '|' + r.awayName + '|' + r.homeName];
+      if (!row) return;
+      master.getRange(row, COL_ACTUAL_WINNER).setValue(r.winnerName);
+      updated++;
+    });
+
+    ensureRecomputeTrigger();
+    computeResults();
+
+    let msg = 'Updated ' + updated + ' completed game(s).';
+    if (problems.length) {
+      msg += '\n\n(' + problems.length + ' week(s) had issues fetching from your browser - the rest loaded fine.)';
+    }
+    return { message: msg };
+  } catch (err) {
+    return { message: 'Fetch succeeded, but saving failed: ' + err.message +
+      '\n\n(Only the spreadsheet owner can update results.)' };
+  }
+}
+
+/**
+ * Same browser-fetch pattern again, this time for moneyline odds (used by
+ * the Gambling Analysis tab). Unlike the schedule/results shape, ESPN's odds
+ * data layout hasn't been verified against live data from this environment
+ * (no network access to espn.com here) - OddsDialog.html tries a couple of
+ * likely field shapes and reports how many games it actually found odds
+ * for, so coverage is visible rather than silently wrong.
+ */
+function showFetchOddsDialog() {
+  const template = HtmlService.createTemplateFromFile('OddsDialog');
+  template.season = SEASON;
+  const html = template.evaluate().setWidth(420).setHeight(220);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Fetching ' + SEASON + ' Betting Odds');
+}
+
+/** Called from OddsDialog.html with every game's moneyline odds it could find. */
+function receiveOddsFromClient(oddsJson, notFound, problemsJson) {
+  const odds = JSON.parse(oddsJson);
+  const problems = JSON.parse(problemsJson || '[]');
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const master = ss.getSheetByName(SCHEDULE_SHEET);
+  if (!master) return { message: 'Run "Initialize" first.' };
+
+  try {
+    const numGames = master.getLastRow() - (FIRST_DATA_ROW - 1);
+    if (numGames <= 0) return { message: 'Run "Initialize" first - no games loaded yet.' };
+
+    master.getRange(1, COL_AWAY_ML).setValue('Away ML').setFontWeight('bold');
+    master.getRange(1, COL_HOME_ML).setValue('Home ML').setFontWeight('bold');
+    const scheduleRows = master.getRange(FIRST_DATA_ROW, 1, numGames, 4).getValues(); // week, date, away, home
+    const rowForKey = {};
+    scheduleRows.forEach(function (r, i) {
+      rowForKey[r[0] + '|' + r[2] + '|' + r[3]] = FIRST_DATA_ROW + i;
+    });
+
+    let updated = 0;
+    odds.forEach(function (o) {
+      const row = rowForKey[o.week + '|' + o.awayName + '|' + o.homeName];
+      if (!row) return;
+      master.getRange(row, COL_AWAY_ML).setValue(o.awayMoneyLine);
+      master.getRange(row, COL_HOME_ML).setValue(o.homeMoneyLine);
+      updated++;
+    });
+
+    ensureRecomputeTrigger();
+    computeResults();
+
+    let msg = 'Found moneyline odds for ' + updated + ' of ' + (updated + notFound) + ' games checked.';
+    if (notFound > 0) {
+      msg += '\n\n' + notFound + ' game(s) had no odds data found and will be skipped in the ' +
+        'Gambling Analysis bankroll simulation for those weeks.';
+    }
+    if (problems.length) {
+      msg += '\n\n(' + problems.length + ' week(s) had issues fetching from your browser - the rest loaded fine.)';
+    }
+    return { message: msg };
+  } catch (err) {
+    return { message: 'Fetch succeeded, but saving failed: ' + err.message +
+      '\n\n(Only the spreadsheet owner can update odds.)' };
+  }
+}
+
+/**
+ * For each game, returns { stadiumType, tempStr, snowStr }. Weather is the
+ * historical average temperature and snow probability for that stadium's
+ * location on that calendar date, pulled once per unique location and reused
+ * across all of that team's home games. Dome games skip weather entirely.
+ */
+function computeStadiumAndWeather(games) {
+  const seriesCache = {};
+  return games.map(function (g) {
+    const info = STADIUMS[g.homeName];
+    if (!info) return { stadiumType: 'Unknown', tempStr: 'N/A', snowStr: 'N/A' };
+    if (info.type === 'Dome') {
+      return { stadiumType: info.type, tempStr: 'N/A (Dome)', snowStr: 'N/A (Dome)' };
+    }
+    const key = info.lat + ',' + info.lon;
+    if (!seriesCache[key]) {
+      seriesCache[key] = fetchWeatherSeries(info.lat, info.lon);
+      Utilities.sleep(150);
+    }
+    const avg = averageForDate(seriesCache[key], new Date(g.date));
+    return {
+      stadiumType: info.type,
+      tempStr: avg ? (Math.round(avg.avgTemp * 10) / 10) + '°F' : 'N/A',
+      snowStr: avg && avg.snowProbability !== null ? Math.round(avg.snowProbability) + '% snow' : 'N/A',
+    };
+  });
+}
+
+/** Daily temp/snowfall history for a location over the last WEATHER_HISTORY_YEARS full years. */
+function fetchWeatherSeries(lat, lon) {
+  const endYear = new Date().getFullYear() - 1;
+  const startYear = endYear - WEATHER_HISTORY_YEARS + 1;
+  const url = 'https://archive-api.open-meteo.com/v1/archive' +
+    '?latitude=' + lat + '&longitude=' + lon +
+    '&start_date=' + startYear + '-01-01&end_date=' + endYear + '-12-31' +
+    '&daily=temperature_2m_mean,snowfall_sum' +
+    '&temperature_unit=fahrenheit&timezone=UTC';
+  const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  if (resp.getResponseCode() !== 200) return [];
+  const data = JSON.parse(resp.getContentText());
+  const daily = data.daily;
+  if (!daily || !daily.time) return [];
+  return daily.time.map(function (dateStr, i) {
+    return {
+      date: new Date(dateStr),
+      temp: daily.temperature_2m_mean[i],
+      snow: daily.snowfall_sum[i],
+    };
+  });
+}
+
+function dayOfYear(date) {
+  const start = new Date(date.getFullYear(), 0, 0);
+  return Math.floor((date - start) / 86400000);
+}
+
+/** Circular distance between two day-of-year values (handles wraparound near Dec/Jan). */
+function doyDistance(a, b) {
+  const d = Math.abs(a - b);
+  return Math.min(d, 366 - d);
+}
+
+/**
+ * Averages temp, and computes snow probability (% of days with any measurable
+ * snowfall), across the same +/-3 day window on the calendar, over all
+ * history years.
+ */
+function averageForDate(series, gameDate) {
+  const targetDoy = dayOfYear(gameDate);
+  const temps = [];
+  let snowDaysWithData = 0;
+  let snowDaysWithSnow = 0;
+  series.forEach(function (pt) {
+    if (doyDistance(dayOfYear(pt.date), targetDoy) > 3) return;
+    if (typeof pt.temp === 'number') temps.push(pt.temp);
+    if (typeof pt.snow === 'number') {
+      snowDaysWithData++;
+      if (pt.snow > 0) snowDaysWithSnow++;
+    }
+  });
+  if (!temps.length) return null;
+  const sum = function (arr) { return arr.reduce(function (a, b) { return a + b; }, 0); };
+  return {
+    avgTemp: sum(temps) / temps.length,
+    snowProbability: snowDaysWithData ? (100 * snowDaysWithSnow / snowDaysWithData) : null,
+  };
+}
+
+/** Builds the read-only master Schedule tab (no picks - members copy from this). */
+function buildScheduleSheet(games, weather) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(SCHEDULE_SHEET);
   if (sheet) {
@@ -91,17 +447,20 @@ function buildScheduleSheet(games) {
   } else {
     sheet = ss.insertSheet(SCHEDULE_SHEET);
   }
-  const header = ['Week', 'Date', 'Away', 'Home'];
-  sheet.getRange(1, 1, 1, header.length).setValues([header]).setFontWeight('bold');
-  const rows = games.map(function (g) {
-    return [g.week, formatGameDate(g.date), g.awayName, g.homeName];
+
+  sheet.getRange(1, 1, 1, MASTER_HEADERS.length).setValues([MASTER_HEADERS]).setFontWeight('bold');
+  const rows = games.map(function (g, i) {
+    const w = weather[i];
+    return [g.week, formatGameDate(g.date), g.awayName, g.homeName, w.stadiumType, w.tempStr, w.snowStr, '', '', ''];
   });
   if (rows.length) {
-    sheet.getRange(2, 1, rows.length, header.length).setValues(rows);
+    sheet.getRange(FIRST_DATA_ROW, 1, rows.length, MASTER_HEADERS.length).setValues(rows);
   }
   sheet.setFrozenRows(1);
   sheet.setFrozenColumns(4);
-  sheet.autoResizeColumns(1, header.length);
+  sheet.autoResizeColumns(1, MASTER_HEADERS.length);
+  protectReadOnlySheet(sheet);
+  return sheet;
 }
 
 function formatGameDate(iso) {
@@ -110,34 +469,173 @@ function formatGameDate(iso) {
 
 function addMemberPrompt() {
   const ui = SpreadsheetApp.getUi();
-  const resp = ui.prompt('Add League Member', 'Enter their name:', ui.ButtonSet.OK_CANCEL);
-  if (resp.getSelectedButton() !== ui.Button.OK) return;
-  const name = resp.getResponseText().trim();
+  const nameResp = ui.prompt('Add League Member', 'Enter their name (this becomes their tab name):', ui.ButtonSet.OK_CANCEL);
+  if (nameResp.getSelectedButton() !== ui.Button.OK) return;
+  const name = nameResp.getResponseText().trim();
   if (!name) return;
-  addMember(name);
-  computeResults();
+
+  const emailResp = ui.prompt('Add League Member', 'Enter their Google account email (needed to lock their tab to just them):', ui.ButtonSet.OK_CANCEL);
+  if (emailResp.getSelectedButton() !== ui.Button.OK) return;
+  const email = emailResp.getResponseText().trim();
+  if (!email) return;
+
+  const result = addMember(name, email);
+  ui.alert(result.message);
 }
 
-function addMember(name) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SCHEDULE_SHEET);
-  if (!sheet) {
-    SpreadsheetApp.getUi().alert('Run "Initialize" first.');
-    return;
+/** Creates a member's own picks tab (copied from the master schedule) and locks it to just them. */
+function addMember(name, email) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const master = ss.getSheetByName(SCHEDULE_SHEET);
+  if (!master) return { message: 'Run "Initialize" first.' };
+  if (ss.getSheetByName(name)) {
+    return { message: 'A tab named "' + name + '" already exists - pick a different name, or delete/rename the existing tab first.' };
   }
-  const numGames = sheet.getLastRow() - 1;
-  const newCol = sheet.getLastColumn() + 1;
-  sheet.getRange(1, newCol).setValue(name).setFontWeight('bold');
-  if (numGames <= 0) return;
 
-  const awayHome = sheet.getRange(2, 3, numGames, 2).getValues();
-  const rules = awayHome.map(function (row) {
-    return [SpreadsheetApp.newDataValidation()
-      .requireValueInList([row[0], row[1]], true)
-      .setAllowInvalid(false)
-      .build()];
-  });
-  sheet.getRange(2, newCol, numGames, 1).setDataValidations(rules);
-  sheet.autoResizeColumn(newCol);
+  const numGames = master.getLastRow() - (FIRST_DATA_ROW - 1);
+  if (numGames <= 0) return { message: 'Run "Initialize" first - no games loaded yet.' };
+
+  try {
+    // Master row = [week, date, away, home, stadium, temp, snow]. Re-map into
+    // the member layout, which interleaves a pick checkbox before each team
+    // name: [week, date, <pickAway>, away, <pickHome>, home, stadium, temp, snow].
+    const masterRows = master.getRange(FIRST_DATA_ROW, 1, numGames, MASTER_HEADERS.length).getValues();
+    const memberRows = masterRows.map(function (r) {
+      return [r[0], r[1], '', r[2], '', r[3], r[4], r[5], r[6]];
+    });
+
+    const sheet = ss.insertSheet(name);
+    sheet.getRange(MEMBER_HEADER_ROW, 1, 1, MEMBER_HEADERS.length).setValues([MEMBER_HEADERS]).setFontWeight('bold');
+    sheet.getRange(MEMBER_FIRST_DATA_ROW, 1, numGames, MEMBER_HEADERS.length).setValues(memberRows);
+    sheet.getRange(MEMBER_FIRST_DATA_ROW, COL_PICK_AWAY, numGames, 1).insertCheckboxes();
+    sheet.getRange(MEMBER_FIRST_DATA_ROW, COL_PICK_HOME, numGames, 1).insertCheckboxes();
+    sheet.setFrozenRows(MEMBER_FIRST_DATA_ROW - 1);
+    sheet.setFrozenColumns(COL_HOME);
+    sheet.autoResizeColumns(1, MEMBER_HEADERS.length);
+    // Narrow the checkbox columns after auto-resize so it doesn't widen them back out.
+    sheet.setColumnWidth(COL_PICK_AWAY, 40);
+    sheet.setColumnWidth(COL_PICK_HOME, 40);
+
+    applyStatusBanner(sheet, numGames);
+    applyPickFormatting(sheet, numGames);
+    protectMemberSheet(sheet, email);
+    registerMember(name, email, sheet.getName());
+    ensureRecomputeTrigger();
+  } catch (err) {
+    return { message: 'Could not add member: ' + err.message + '\n\n(Only the spreadsheet owner can add members.)' };
+  }
+
+  return { message: 'Added ' + name + '. Share the spreadsheet with ' + email + ' (Editor access) so they can fill in their tab.' };
+}
+
+/**
+ * Writes a live status banner in row 1 ("All N games picked!" / "N left")
+ * driven by a plain Sheets formula, so it updates instantly on every
+ * checkbox click with no script/trigger round-trip. Color follows via
+ * conditional formatting on the banner text itself.
+ */
+function applyStatusBanner(sheet, numGames) {
+  const lastDataRow = MEMBER_FIRST_DATA_ROW + numGames - 1;
+  const awayCol = columnLetter(COL_PICK_AWAY);
+  const homeCol = columnLetter(COL_PICK_HOME);
+  const awayRange = '$' + awayCol + '$' + MEMBER_FIRST_DATA_ROW + ':$' + awayCol + '$' + lastDataRow;
+  const homeRange = '$' + homeCol + '$' + MEMBER_FIRST_DATA_ROW + ':$' + homeCol + '$' + lastDataRow;
+  const missingCountExpr = 'COUNTIFS(' + awayRange + ',FALSE,' + homeRange + ',FALSE)';
+
+  const formula = '=IF(' + missingCountExpr + '=0,' +
+    '"✅ All ' + numGames + ' games picked!",' +
+    '"⏳ " & ' + missingCountExpr + ' & " of ' + numGames + ' games still need a pick")';
+
+  // Merging can't cross the frozen/non-frozen column boundary (set in
+  // addMember before this runs), so the banner spans only the frozen
+  // columns (1..COL_HOME) - which stay visible regardless of scroll anyway.
+  const bannerRange = sheet.getRange(1, 1, 1, COL_HOME);
+  bannerRange.merge().setFormula(formula).setHorizontalAlignment('center')
+    .setVerticalAlignment('middle').setFontWeight('bold').setFontSize(12);
+
+  const completeRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenTextContains('✅')
+    .setBackground(PICK_GREEN)
+    .setRanges([bannerRange])
+    .build();
+  const incompleteRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenTextContains('⏳')
+    .setBackground(INCOMPLETE_RED)
+    .setRanges([bannerRange])
+    .build();
+
+  sheet.setConditionalFormatRules(sheet.getConditionalFormatRules().concat([completeRule, incompleteRule]));
+}
+
+/** Turns a team's name green when its pick checkbox (in the same row) is checked. */
+function applyPickFormatting(sheet, numGames) {
+  const awayNameRange = sheet.getRange(MEMBER_FIRST_DATA_ROW, COL_AWAY, numGames, 1);
+  const homeNameRange = sheet.getRange(MEMBER_FIRST_DATA_ROW, COL_HOME, numGames, 1);
+  const awayCol = columnLetter(COL_PICK_AWAY);
+  const homeCol = columnLetter(COL_PICK_HOME);
+
+  const awayRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=$' + awayCol + MEMBER_FIRST_DATA_ROW + '=TRUE')
+    .setBackground(PICK_GREEN)
+    .setBold(true)
+    .setRanges([awayNameRange])
+    .build();
+  const homeRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=$' + homeCol + MEMBER_FIRST_DATA_ROW + '=TRUE')
+    .setBackground(PICK_GREEN)
+    .setBold(true)
+    .setRanges([homeNameRange])
+    .build();
+
+  sheet.setConditionalFormatRules(sheet.getConditionalFormatRules().concat([awayRule, homeRule]));
+}
+
+/** Converts a 1-based column index to its A1 letter (3 -> "C"). */
+function columnLetter(col) {
+  let letter = '';
+  while (col > 0) {
+    const rem = (col - 1) % 26;
+    letter = String.fromCharCode(65 + rem) + letter;
+    col = Math.floor((col - 1) / 26);
+  }
+  return letter;
+}
+
+/** Restricts editing of a sheet to just the given email (the owner always retains edit access). */
+function protectMemberSheet(sheet, email) {
+  const protection = sheet.protect().setDescription('Picks for ' + sheet.getName() + ' - edit-locked to that member');
+  protection.removeEditors(protection.getEditors());
+  if (protection.canDomainEdit()) protection.setDomainEdit(false);
+  protection.addEditor(email);
+}
+
+/** Locks a computed/reference sheet so only the spreadsheet owner can edit it. Idempotent. */
+function protectReadOnlySheet(sheet) {
+  if (sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).length > 0) return;
+  const protection = sheet.protect().setDescription('Read-only - computed/reference data');
+  protection.removeEditors(protection.getEditors());
+  if (protection.canDomainEdit()) protection.setDomainEdit(false);
+}
+
+/** Members registry: Name | Email | Tab. Kept hidden and owner-only editable. */
+function registerMember(name, email, tabName) {
+  const reg = getOrCreateSheet(MEMBERS_SHEET);
+  if (reg.getLastRow() === 0) {
+    reg.getRange(1, 1, 1, 3).setValues([['Name', 'Email', 'Tab']]).setFontWeight('bold');
+  }
+  reg.appendRow([name, email, tabName]);
+  reg.hideSheet();
+  protectReadOnlySheet(reg);
+}
+
+/** Returns [{ name, email, tab }, ...] from the Members registry. */
+function getMembers() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const reg = ss.getSheetByName(MEMBERS_SHEET);
+  if (!reg || reg.getLastRow() < 2) return [];
+  return reg.getRange(2, 1, reg.getLastRow() - 1, 3).getValues()
+    .filter(function (row) { return row[0]; })
+    .map(function (row) { return { name: row[0], email: row[1], tab: row[2] }; });
 }
 
 function getOrCreateSheet(name) {
@@ -147,67 +645,275 @@ function getOrCreateSheet(name) {
   return sh;
 }
 
+function recomputeResultsMenuAction() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    computeResults();
+    ui.alert('Results recomputed.');
+  } catch (err) {
+    ui.alert('Could not recompute (' + err.message + '). Results already update automatically as picks come in, ' +
+      'so you likely don\'t need to run this manually - only the spreadsheet owner can force a recompute.');
+  }
+}
+
 function computeResults() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sched = ss.getSheetByName(SCHEDULE_SHEET);
+  const master = ss.getSheetByName(SCHEDULE_SHEET);
   const divSheet = getOrCreateSheet(DIVWIN_SHEET);
   const tallySheet = getOrCreateSheet(TALLY_SHEET);
+  const weeklySheet = getOrCreateSheet(WEEKLY_RESULTS_SHEET);
+  const gamblingSheet = getOrCreateSheet(GAMBLING_SHEET);
   divSheet.clear();
   tallySheet.clear();
+  weeklySheet.clear();
+  gamblingSheet.clear();
 
-  if (!sched) return;
-  const numGames = sched.getLastRow() - 1;
-  const numMembers = sched.getLastColumn() - (FIRST_MEMBER_COL - 1);
-  if (numMembers <= 0 || numGames <= 0) {
+  if (!master) return;
+  const numGames = master.getLastRow() - (FIRST_DATA_ROW - 1);
+  const memberRecords = getMembers();
+  if (!memberRecords.length || numGames <= 0) {
     divSheet.getRange(1, 1).setValue('Add members and picks to see results.');
     tallySheet.getRange(1, 1).setValue('Add members and picks to see results.');
+    weeklySheet.getRange(1, 1).setValue('Add members and picks to see results.');
+    gamblingSheet.getRange(1, 1).setValue('Add members and picks to see results.');
+    protectReadOnlySheet(divSheet);
+    protectReadOnlySheet(tallySheet);
+    protectReadOnlySheet(weeklySheet);
+    protectReadOnlySheet(gamblingSheet);
     return;
   }
 
-  const members = sched.getRange(1, FIRST_MEMBER_COL, 1, numMembers).getValues()[0];
-  // Columns C.. => [away, home, pick1, pick2, ...]
-  const data = sched.getRange(2, 3, numGames, 2 + numMembers).getValues();
-
+  const masterWeeks = master.getRange(FIRST_DATA_ROW, 1, numGames, 1).getValues().map(function (r) { return r[0]; });
+  const masterAwayHome = master.getRange(FIRST_DATA_ROW, 3, numGames, 2).getValues();
+  const actualWinners = master.getRange(FIRST_DATA_ROW, COL_ACTUAL_WINNER, numGames, 1).getValues()
+    .map(function (r) { return r[0] || null; });
+  const awayMoneyLines = master.getRange(FIRST_DATA_ROW, COL_AWAY_ML, numGames, 1).getValues()
+    .map(function (r) { return typeof r[0] === 'number' ? r[0] : null; });
+  const homeMoneyLines = master.getRange(FIRST_DATA_ROW, COL_HOME_ML, numGames, 1).getValues()
+    .map(function (r) { return typeof r[0] === 'number' ? r[0] : null; });
+  const members = memberRecords.map(function (m) { return m.name; });
   const winCounts = members.map(function () { return {}; });
   const pickedCounts = members.map(function () { return 0; });
+  // picksByGame[m][g] = the team that member m picked to win game g (or null
+  // if unpicked) - needed to resolve division-winner ties (head-to-head /
+  // division record depend on individual game outcomes, not just totals).
+  const picksByGame = members.map(function () { return new Array(numGames).fill(null); });
 
-  data.forEach(function (row) {
-    const away = row[0];
-    const home = row[1];
-    for (let m = 0; m < numMembers; m++) {
-      const pick = row[2 + m];
-      if (pick === away || pick === home) {
+  memberRecords.forEach(function (mem, m) {
+    const sheet = ss.getSheetByName(mem.tab);
+    if (!sheet) return; // tab was renamed/deleted; treat as no picks
+    // COL_PICK_AWAY and COL_PICK_HOME aren't adjacent (the team name column
+    // sits between them), so they're read separately rather than as one range.
+    const awayPicks = sheet.getRange(MEMBER_FIRST_DATA_ROW, COL_PICK_AWAY, numGames, 1).getValues();
+    const homePicks = sheet.getRange(MEMBER_FIRST_DATA_ROW, COL_PICK_HOME, numGames, 1).getValues();
+    for (let g = 0; g < numGames; g++) {
+      const away = masterAwayHome[g][0];
+      const home = masterAwayHome[g][1];
+      const awayChecked = awayPicks[g][0] === true;
+      const homeChecked = homePicks[g][0] === true;
+      let pick = null;
+      if (awayChecked && !homeChecked) pick = away;
+      else if (homeChecked && !awayChecked) pick = home;
+      if (pick) {
         pickedCounts[m]++;
         winCounts[m][pick] = (winCounts[m][pick] || 0) + 1;
+        picksByGame[m][g] = pick;
       }
     }
   });
 
   const complete = pickedCounts.map(function (c) { return c === numGames; });
   const divNames = Object.keys(DIVISIONS);
+  const results = resolveAllDivisionWinners(members, complete, winCounts, picksByGame, masterAwayHome, divNames);
 
-  writeDivisionWinners(divSheet, members, complete, pickedCounts, numGames, winCounts, divNames);
-  writeTally(tallySheet, members, complete, winCounts, divNames);
+  writeDivisionWinners(divSheet, members, complete, pickedCounts, numGames, results, divNames);
+  writeTally(tallySheet, members, complete, results, divNames);
+  writeWeeklyResults(weeklySheet, members, picksByGame, masterWeeks, actualWinners, numGames);
+  writeGamblingAnalysis(gamblingSheet, members, picksByGame, masterWeeks, actualWinners, masterAwayHome, awayMoneyLines, homeMoneyLines);
+  protectReadOnlySheet(divSheet);
+  protectReadOnlySheet(tallySheet);
+  protectReadOnlySheet(weeklySheet);
+  protectReadOnlySheet(gamblingSheet);
 }
 
-function writeDivisionWinners(divSheet, members, complete, pickedCounts, numGames, winCounts, divNames) {
+const ALL_TEAMS = Object.keys(DIVISIONS).reduce(function (acc, div) { return acc.concat(DIVISIONS[div]); }, []);
+
+/**
+ * For each division and member, picks the division winner from that
+ * member's win counts, resolving ties with five of the NFL/ESPN's official
+ * tiebreakers, in order: head-to-head, division record, conference record,
+ * strength of victory, strength of schedule - all fully computable from
+ * picks alone. Skipped: common games (rarely decisive once conference
+ * record is in play), the points-based tiebreakers and coin toss (need
+ * real scores this tool never tracks). Remaining ties (rare) are left as
+ * an explicit tie.
+ */
+function resolveAllDivisionWinners(members, complete, winCounts, picksByGame, masterAwayHome, divNames) {
+  const statsByMember = members.map(function (mem, m) {
+    return complete[m] ? buildSeasonStats(picksByGame[m], masterAwayHome) : null;
+  });
+
+  return divNames.map(function (div) {
+    const teams = DIVISIONS[div];
+    return members.map(function (mem, m) {
+      if (!complete[m]) return null;
+      return resolveDivisionWinner(teams, winCounts[m], picksByGame[m], masterAwayHome, statsByMember[m]);
+    });
+  });
+}
+
+/** Returns { winners: [team,...], wins: n, resolvedBy: <tiebreaker name> | null }. */
+function resolveDivisionWinner(divisionTeams, winCountsForMember, picks, masterAwayHome, stats) {
+  const counts = divisionTeams.map(function (t) { return winCountsForMember[t] || 0; });
+  const max = Math.max.apply(null, counts);
+  let tied = divisionTeams.filter(function (t, i) { return counts[i] === max; });
+  if (tied.length === 1) return { winners: tied, wins: max, resolvedBy: null };
+
+  const steps = [
+    { name: 'head-to-head', narrow: function (t) {
+      return narrowByRecordInGames(t, picks, masterAwayHome, function (away, home) {
+        return t.indexOf(away) !== -1 && t.indexOf(home) !== -1;
+      });
+    } },
+    { name: 'division record', narrow: function (t) {
+      return narrowByRecordInGames(t, picks, masterAwayHome, function (away, home) {
+        return divisionTeams.indexOf(away) !== -1 && divisionTeams.indexOf(home) !== -1;
+      });
+    } },
+    { name: 'conference record', narrow: function (t) {
+      return narrowByMetric(t, function (team) { return conferenceRecordPct(stats, team); });
+    } },
+    { name: 'strength of victory', narrow: function (t) {
+      return narrowByMetric(t, function (team) { return strengthOfVictory(stats, team); });
+    } },
+    { name: 'strength of schedule', narrow: function (t) {
+      return narrowByMetric(t, function (team) { return strengthOfSchedule(stats, team); });
+    } },
+  ];
+
+  for (let i = 0; i < steps.length; i++) {
+    const next = steps[i].narrow(tied);
+    if (next.length === 1) return { winners: next, wins: max, resolvedBy: steps[i].name };
+    if (next.length < tied.length) tied = next;
+  }
+
+  return { winners: tied, wins: max, resolvedBy: null };
+}
+
+/**
+ * Narrows `tiedTeams` to whichever have the best win percentage among games
+ * matching `includeGame(away, home)`. Used for both head-to-head (games
+ * between just the tied teams) and division record (games within the whole
+ * division, credited only to the still-tied teams).
+ */
+function narrowByRecordInGames(tiedTeams, picks, masterAwayHome, includeGame) {
+  const wins = {};
+  const games = {};
+  tiedTeams.forEach(function (t) { wins[t] = 0; games[t] = 0; });
+
+  masterAwayHome.forEach(function (pair, g) {
+    const away = pair[0];
+    const home = pair[1];
+    if (!includeGame(away, home)) return;
+    const pick = picks[g];
+    if (!pick) return;
+    if (tiedTeams.indexOf(away) !== -1) { games[away]++; if (pick === away) wins[away]++; }
+    if (tiedTeams.indexOf(home) !== -1) { games[home]++; if (pick === home) wins[home]++; }
+  });
+
+  const pct = tiedTeams.map(function (t) { return games[t] ? wins[t] / games[t] : 0; });
+  const maxPct = Math.max.apply(null, pct);
+  return tiedTeams.filter(function (t, i) { return pct[i] === maxPct; });
+}
+
+/** Narrows `tiedTeams` to whichever have the highest value of metricFn(team). */
+function narrowByMetric(tiedTeams, metricFn) {
+  const values = tiedTeams.map(metricFn);
+  const maxVal = Math.max.apply(null, values);
+  return tiedTeams.filter(function (t, i) { return values[i] === maxVal; });
+}
+
+/**
+ * For one member, builds every team's full-season game log (all 32 teams,
+ * from the whole schedule, not just one division): who they played, whether
+ * they won (per this member's picks), and whether it was a conference game.
+ * Powers conference record, strength of victory, and strength of schedule.
+ */
+function buildSeasonStats(picks, masterAwayHome) {
+  const gameLog = {};
+  ALL_TEAMS.forEach(function (t) { gameLog[t] = []; });
+
+  masterAwayHome.forEach(function (pair, g) {
+    const away = pair[0];
+    const home = pair[1];
+    const pick = picks[g];
+    if (!pick || !gameLog[away] || !gameLog[home]) return;
+    const sameConference = teamConference(away) === teamConference(home);
+    gameLog[away].push({ opponent: home, won: pick === away, conferenceGame: sameConference });
+    gameLog[home].push({ opponent: away, won: pick === home, conferenceGame: sameConference });
+  });
+
+  const wins = {};
+  const games = {};
+  ALL_TEAMS.forEach(function (t) {
+    wins[t] = gameLog[t].filter(function (g) { return g.won; }).length;
+    games[t] = gameLog[t].length;
+  });
+
+  return { gameLog: gameLog, wins: wins, games: games };
+}
+
+/** 'AFC' or 'NFC' for a team, derived from its division name. */
+function teamConference(team) {
+  for (const div in DIVISIONS) {
+    if (DIVISIONS[div].indexOf(team) !== -1) return div.split(' ')[0];
+  }
+  return null;
+}
+
+function conferenceRecordPct(stats, team) {
+  const confGames = stats.gameLog[team].filter(function (g) { return g.conferenceGame; });
+  if (!confGames.length) return 0;
+  const w = confGames.filter(function (g) { return g.won; }).length;
+  return w / confGames.length;
+}
+
+/** Aggregate win pct of every opponent this team has defeated (with multiplicity). */
+function strengthOfVictory(stats, team) {
+  const defeated = stats.gameLog[team].filter(function (g) { return g.won; });
+  return opponentAggregatePct(stats, defeated);
+}
+
+/** Aggregate win pct of every opponent this team has played (with multiplicity). */
+function strengthOfSchedule(stats, team) {
+  return opponentAggregatePct(stats, stats.gameLog[team]);
+}
+
+function opponentAggregatePct(stats, gameEntries) {
+  if (!gameEntries.length) return 0;
+  const sumWins = gameEntries.reduce(function (s, g) { return s + stats.wins[g.opponent]; }, 0);
+  const sumGames = gameEntries.reduce(function (s, g) { return s + stats.games[g.opponent]; }, 0);
+  return sumGames ? sumWins / sumGames : 0;
+}
+
+function writeDivisionWinners(divSheet, members, complete, pickedCounts, numGames, results, divNames) {
   const header = ['Division'].concat(members);
   divSheet.getRange(1, 1, 1, header.length).setValues([header]).setFontWeight('bold');
 
-  const rows = divNames.map(function (div) {
-    const teams = DIVISIONS[div];
+  const rows = divNames.map(function (div, d) {
     const row = [div];
     members.forEach(function (mem, m) {
       if (!complete[m]) {
         row.push('(incomplete: ' + pickedCounts[m] + '/' + numGames + ')');
         return;
       }
-      const counts = teams.map(function (t) { return winCounts[m][t] || 0; });
-      const max = Math.max.apply(null, counts);
-      const winners = teams.filter(function (t, i) { return counts[i] === max; });
-      row.push(winners.length > 1
-        ? 'TIE: ' + winners.join(' / ') + ' (' + max + ' wins each)'
-        : winners[0] + ' (' + max + ' wins)');
+      const r = results[d][m];
+      if (r.winners.length > 1) {
+        row.push('TIE: ' + r.winners.join(' / ') + ' (' + r.wins + ' wins each)');
+      } else {
+        const suffix = r.resolvedBy ? ', won tiebreaker on ' + r.resolvedBy : '';
+        row.push(r.winners[0] + ' (' + r.wins + ' wins' + suffix + ')');
+      }
     });
     return row;
   });
@@ -217,13 +923,13 @@ function writeDivisionWinners(divSheet, members, complete, pickedCounts, numGame
   divSheet.autoResizeColumns(1, header.length);
 }
 
-function writeTally(tallySheet, members, complete, winCounts, divNames) {
+function writeTally(tallySheet, members, complete, results, divNames) {
   const completeCount = complete.filter(Boolean).length;
   const out = [];
   out.push(['Tally based on ' + completeCount + ' of ' + members.length + ' members with complete picks']);
   out.push(['']);
 
-  divNames.forEach(function (div) {
+  divNames.forEach(function (div, d) {
     const teams = DIVISIONS[div];
     out.push([div]);
 
@@ -231,9 +937,8 @@ function writeTally(tallySheet, members, complete, winCounts, divNames) {
       let votes = 0;
       members.forEach(function (mem, m) {
         if (!complete[m]) return;
-        const counts = teams.map(function (t) { return winCounts[m][t] || 0; });
-        const max = Math.max.apply(null, counts);
-        if (max > 0 && (winCounts[m][team] || 0) === max) votes++;
+        const r = results[d][m];
+        if (r.wins > 0 && r.winners.indexOf(team) !== -1) votes++;
       });
       return [team, votes];
     });
@@ -258,4 +963,249 @@ function writeTally(tallySheet, members, complete, winCounts, divNames) {
   });
   tallySheet.getRange(1, 1, padded.length, width).setValues(padded);
   tallySheet.autoResizeColumns(1, width);
+}
+
+/**
+ * Scores every member's picks against actual results (Actual Winner column
+ * on the master Schedule - blank for games not yet played). Writes a
+ * postable summary (most recent completed week + season standings) followed
+ * by the full week-by-week matrix. Unlike division winners, this doesn't
+ * require a member's picks to be complete - each game just needs both a
+ * pick and a known result to count.
+ */
+function writeWeeklyResults(sheet, members, picksByGame, masterWeeks, actualWinners, numGames) {
+  const weeks = [];
+  masterWeeks.forEach(function (w) { if (weeks.indexOf(w) === -1) weeks.push(w); });
+  weeks.sort(function (a, b) { return a - b; });
+
+  const completedPerWeek = {};
+  weeks.forEach(function (w) { completedPerWeek[w] = 0; });
+  for (let g = 0; g < numGames; g++) {
+    if (actualWinners[g]) completedPerWeek[masterWeeks[g]]++;
+  }
+
+  const correctPerWeek = members.map(function () {
+    const o = {}; weeks.forEach(function (w) { o[w] = 0; }); return o;
+  });
+  const playedPerWeek = members.map(function () {
+    const o = {}; weeks.forEach(function (w) { o[w] = 0; }); return o;
+  });
+
+  members.forEach(function (mem, m) {
+    for (let g = 0; g < numGames; g++) {
+      const winner = actualWinners[g];
+      const pick = picksByGame[m][g];
+      if (!winner || !pick) continue;
+      const week = masterWeeks[g];
+      playedPerWeek[m][week]++;
+      if (pick === winner) correctPerWeek[m][week]++;
+    }
+  });
+
+  const totalCorrect = members.map(function (mem, m) {
+    return weeks.reduce(function (s, w) { return s + correctPerWeek[m][w]; }, 0);
+  });
+  const totalPlayed = members.map(function (mem, m) {
+    return weeks.reduce(function (s, w) { return s + playedPerWeek[m][w]; }, 0);
+  });
+
+  const latestWeeks = weeks.filter(function (w) { return completedPerWeek[w] > 0; });
+  const latestWeek = latestWeeks.length ? latestWeeks[latestWeeks.length - 1] : null;
+
+  const postable = buildPostableSummary(members, correctPerWeek, playedPerWeek, totalCorrect, totalPlayed, latestWeek);
+  const out = postable.map(function (line) { return [line]; });
+  out.push(['']);
+  out.push(['']);
+
+  const matrixHeaderRow = out.length + 1; // 1-indexed sheet row this will land on
+  const matrixHeader = ['Week', 'Games Final'].concat(members);
+  out.push(matrixHeader);
+  weeks.forEach(function (w) {
+    const row = [w, completedPerWeek[w]];
+    members.forEach(function (mem, m) {
+      row.push(formatRecord(correctPerWeek[m][w], playedPerWeek[m][w], completedPerWeek[w]));
+    });
+    out.push(row);
+  });
+  const totalCompleted = weeks.reduce(function (s, w) { return s + completedPerWeek[w]; }, 0);
+  const totalRowNumber = out.length + 1;
+  const totalRow = ['SEASON TOTAL', totalCompleted];
+  members.forEach(function (mem, m) {
+    totalRow.push(formatRecord(totalCorrect[m], totalPlayed[m], totalCompleted));
+  });
+  out.push(totalRow);
+
+  const width = out.reduce(function (w, r) { return Math.max(w, r.length); }, 1);
+  const padded = out.map(function (r) {
+    const copy = r.slice();
+    while (copy.length < width) copy.push('');
+    return copy;
+  });
+  sheet.getRange(1, 1, padded.length, width).setValues(padded);
+  sheet.getRange(matrixHeaderRow, 1, 1, width).setFontWeight('bold');
+  sheet.getRange(totalRowNumber, 1, 1, width).setFontWeight('bold');
+  sheet.autoResizeColumns(1, width);
+}
+
+function formatRecord(correct, played, weekHasCompletedGames) {
+  if (played > 0) return correct + '-' + (played - correct);
+  return weekHasCompletedGames > 0 ? '0-0' : '-';
+}
+
+/** Plain-text lines meant to be selected and pasted straight into a group chat. */
+function buildPostableSummary(members, correctPerWeek, playedPerWeek, totalCorrect, totalPlayed, latestWeek) {
+  const lines = [];
+  lines.push('🏈 WEEK ' + (latestWeek || '-') + ' RESULTS');
+  if (latestWeek === null) {
+    lines.push('No games completed yet.');
+  } else {
+    const weekStandings = members
+      .map(function (mem, m) { return { name: mem, correct: correctPerWeek[m][latestWeek], played: playedPerWeek[m][latestWeek] }; })
+      .filter(function (s) { return s.played > 0; })
+      .sort(function (a, b) { return b.correct - a.correct || (b.correct / b.played) - (a.correct / a.played); });
+    if (!weekStandings.length) {
+      lines.push('No member has picks in for completed games yet.');
+    }
+    weekStandings.forEach(function (s) {
+      const pct = s.played ? (100 * s.correct / s.played).toFixed(1) : '0.0';
+      lines.push(s.name + ': ' + s.correct + '-' + (s.played - s.correct) + ' (' + pct + '%)');
+    });
+  }
+
+  lines.push('');
+  lines.push('📊 SEASON STANDINGS' + (latestWeek ? ' (through Week ' + latestWeek + ')' : ''));
+  const seasonStandings = members
+    .map(function (mem, m) { return { name: mem, correct: totalCorrect[m], played: totalPlayed[m] }; })
+    .filter(function (s) { return s.played > 0; })
+    .sort(function (a, b) { return b.correct - a.correct || (b.correct / b.played) - (a.correct / a.played); });
+  if (!seasonStandings.length) {
+    lines.push('No completed games yet.');
+  }
+  seasonStandings.forEach(function (s, i) {
+    const pct = s.played ? (100 * s.correct / s.played).toFixed(1) : '0.0';
+    lines.push((i + 1) + '. ' + s.name + ' — ' + s.correct + '-' + (s.played - s.correct) + ' (' + pct + '%)');
+  });
+
+  return lines;
+}
+
+/**
+ * Simulates each member starting Week 1 with STARTING_BANKROLL, betting it
+ * equally across that week's picked games (moneyline), then each later week
+ * re-betting their ENTIRE current bankroll equally across that week's picks
+ * - so a bad week compounds and an empty bankroll stays empty. Writes a
+ * postable standings block followed by a week-by-week bankroll matrix.
+ *
+ * A week only resolves once every one of that week's stakeable games (picked
+ * AND has moneyline odds) has a known actual result - all of a week's bets
+ * are placed before any outcome is known, so the next week's stake can't be
+ * sized until this one is fully settled. Until then that week, and every
+ * week after it, shows as "pending". A picked game with no odds data is
+ * simply excluded from that week's stake split (see header note on odds
+ * coverage); a week with no stakeable picks leaves the bankroll unchanged.
+ */
+function writeGamblingAnalysis(sheet, members, picksByGame, masterWeeks, actualWinners, masterAwayHome, awayMoneyLines, homeMoneyLines) {
+  const weeks = [];
+  masterWeeks.forEach(function (w) { if (weeks.indexOf(w) === -1) weeks.push(w); });
+  weeks.sort(function (a, b) { return a - b; });
+
+  const perMemberWeeks = members.map(function (mem, m) {
+    return simulateBankroll(picksByGame[m], masterWeeks, actualWinners, masterAwayHome, awayMoneyLines, homeMoneyLines, weeks);
+  });
+
+  const postable = buildBankrollSummary(members, perMemberWeeks, weeks);
+  const out = postable.map(function (line) { return [line]; });
+  out.push(['']);
+  out.push(['']);
+
+  const matrixHeaderRow = out.length + 1;
+  out.push(['Week'].concat(members));
+  weeks.forEach(function (w) {
+    const row = [w];
+    perMemberWeeks.forEach(function (weekMap) {
+      const entry = weekMap[w];
+      row.push(entry.pending ? 'pending' : '$' + entry.bankroll.toFixed(2));
+    });
+    out.push(row);
+  });
+
+  const width = out.reduce(function (w, r) { return Math.max(w, r.length); }, 1);
+  const padded = out.map(function (r) {
+    const copy = r.slice();
+    while (copy.length < width) copy.push('');
+    return copy;
+  });
+  sheet.getRange(1, 1, padded.length, width).setValues(padded);
+  sheet.getRange(matrixHeaderRow, 1, 1, width).setFontWeight('bold');
+  sheet.autoResizeColumns(1, width);
+}
+
+/** Profit per $1 staked if a bet at this American moneyline wins. */
+function moneylinePayoutMultiplier(moneyLine) {
+  return moneyLine > 0 ? moneyLine / 100 : 100 / Math.abs(moneyLine);
+}
+
+/** Returns { week: { bankroll, pending } } for one member across all weeks. */
+function simulateBankroll(picks, masterWeeks, actualWinners, masterAwayHome, awayMoneyLines, homeMoneyLines, weeks) {
+  let bankroll = STARTING_BANKROLL;
+  let stillPending = false;
+  const perWeek = {};
+
+  weeks.forEach(function (week) {
+    if (stillPending) { perWeek[week] = { bankroll: null, pending: true }; return; }
+
+    const stakeableGames = [];
+    for (let g = 0; g < masterWeeks.length; g++) {
+      if (masterWeeks[g] !== week || !picks[g]) continue;
+      const isAway = picks[g] === masterAwayHome[g][0];
+      const moneyLine = isAway ? awayMoneyLines[g] : homeMoneyLines[g];
+      if (typeof moneyLine !== 'number') continue; // no odds data - excluded from this week's stake split
+      stakeableGames.push(g);
+    }
+
+    if (!stakeableGames.length) {
+      perWeek[week] = { bankroll: bankroll, pending: false }; // nothing to bet on - unchanged
+      return;
+    }
+
+    const allDecided = stakeableGames.every(function (g) { return !!actualWinners[g]; });
+    if (!allDecided) {
+      perWeek[week] = { bankroll: null, pending: true };
+      stillPending = true;
+      return;
+    }
+
+    const stake = bankroll / stakeableGames.length;
+    let endBankroll = 0;
+    stakeableGames.forEach(function (g) {
+      if (actualWinners[g] !== picks[g]) return; // bet lost, stake contributes 0
+      const isAway = picks[g] === masterAwayHome[g][0];
+      const moneyLine = isAway ? awayMoneyLines[g] : homeMoneyLines[g];
+      endBankroll += stake * (1 + moneylinePayoutMultiplier(moneyLine));
+    });
+    bankroll = endBankroll;
+    perWeek[week] = { bankroll: bankroll, pending: false };
+  });
+
+  return perWeek;
+}
+
+/** Plain-text standings using each member's most recently resolved bankroll. */
+function buildBankrollSummary(members, perMemberWeeks, weeks) {
+  const standings = members.map(function (mem, m) {
+    let latest = STARTING_BANKROLL;
+    for (let i = 0; i < weeks.length; i++) {
+      const entry = perMemberWeeks[m][weeks[i]];
+      if (entry.pending) break;
+      latest = entry.bankroll;
+    }
+    return { name: mem, bankroll: latest };
+  });
+  standings.sort(function (a, b) { return b.bankroll - a.bankroll; });
+
+  const lines = ['💰 BANKROLL STANDINGS (started at $' + STARTING_BANKROLL.toFixed(2) + ')'];
+  standings.forEach(function (s, i) {
+    lines.push((i + 1) + '. ' + s.name + ' — $' + s.bankroll.toFixed(2));
+  });
+  return lines;
 }
