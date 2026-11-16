@@ -1,0 +1,2125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fantasy Draft Day Analyzer</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --border: #dde1e6;
+    --text: #1c2128;
+    --muted: #667085;
+    --accent: #2f6fed;
+    --accent-fg: #ffffff;
+    --good: #1a7f37;
+    --good-bg: #e6f6ea;
+    --bad: #b42318;
+    --bad-bg: #fdecea;
+    --warn-bg: #fff6e5;
+    --row-hover: #f0f4ff;
+    --slot-open: #fff3f0;
+    --slot-filled: #eef7ee;
+    --rook: #7c3aed;
+    --rook-bg: #f1e9ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --panel: #1c1f26;
+      --border: #2c313a;
+      --text: #e6e8eb;
+      --muted: #9aa4b2;
+      --accent: #5b8def;
+      --accent-fg: #0b1020;
+      --good: #4cc26a;
+      --good-bg: #123420;
+      --bad: #ff6b5e;
+      --bad-bg: #3a1414;
+      --warn-bg: #332a10;
+      --row-hover: #232833;
+      --slot-open: #3a2420;
+      --slot-filled: #1c2e1f;
+      --rook: #b794f6;
+      --rook-bg: #2f2140;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header h1 { margin: 0 0 2px; font-size: 18px; }
+  header p { margin: 0; color: var(--muted); font-size: 12.5px; }
+
+  nav.tabs {
+    display: flex;
+    gap: 4px;
+    padding: 8px 20px 0;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  nav.tabs button {
+    background: none;
+    border: 1px solid transparent;
+    border-bottom: none;
+    padding: 8px 14px;
+    font-size: 13.5px;
+    color: var(--muted);
+    cursor: pointer;
+    border-radius: 6px 6px 0 0;
+  }
+  nav.tabs button.active {
+    color: var(--text);
+    font-weight: 600;
+    background: var(--bg);
+    border-color: var(--border);
+  }
+
+  main { padding: 18px 20px 60px; max-width: 1300px; margin: 0 auto; }
+  .tabpanel { display: none; }
+  .tabpanel.active { display: block; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .panel h2 { margin: 0 0 10px; font-size: 15px; }
+  .panel h3 { margin: 14px 0 8px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 880px) {
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  }
+
+  label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+  input[type=text], input[type=number], textarea, select {
+    width: 100%;
+    padding: 7px 9px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13.5px;
+    font-family: inherit;
+  }
+  textarea { resize: vertical; min-height: 110px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .field { margin-bottom: 10px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; }
+  .row > * { flex: 1; min-width: 120px; }
+
+  button.btn {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border: none;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.btn.secondary {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  button.btn.danger { background: var(--bad); color: #fff; }
+  button.btn:disabled { opacity: .45; cursor: not-allowed; }
+  button.btn-sm { padding: 4px 9px; font-size: 12px; border-radius: 5px; }
+  button.btn.listening { background: var(--bad); color: #fff; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .6; } }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .03em; }
+  tbody tr:hover { background: var(--row-hover); }
+  .table-scroll { max-height: 480px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .table-scroll table { margin: 0; }
+  .table-scroll thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+
+  .pos-pill {
+    display: inline-block;
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+  .pos-QB { color: #a23bd8; }
+  .pos-RB { color: #1a9e5c; }
+  .pos-WR { color: #2f6fed; }
+  .pos-TE { color: #e08a1e; }
+  .pos-DST { color: #667085; }
+  .pos-K { color: #b42318; }
+
+  .clock-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: linear-gradient(135deg, var(--accent), #7a4ff0);
+    color: #fff;
+    padding: 14px 18px;
+    border-radius: 10px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .clock-banner .who { font-size: 17px; font-weight: 700; }
+  .clock-banner .meta { font-size: 12.5px; opacity: .9; }
+
+  .filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .filters button {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 5px 11px;
+    border-radius: 999px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .filters button.active { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+
+  .needs-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+  .team-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--bg); }
+  .team-card h4 { margin: 0 0 8px; font-size: 13.5px; display: flex; justify-content: space-between; }
+  .slot-row { display: flex; justify-content: space-between; font-size: 12.5px; padding: 3px 0; border-bottom: 1px dashed var(--border); }
+  .slot-row:last-child { border-bottom: none; }
+  .slot-row .slot-name { color: var(--muted); width: 60px; flex-shrink: 0; }
+  .slot-row.open { background: var(--slot-open); }
+  .slot-row.filled { background: var(--slot-filled); }
+
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+  .badge.good { background: var(--good-bg); color: var(--good); }
+  .badge.bad { background: var(--bad-bg); color: var(--bad); }
+  .badge.warn { background: var(--warn-bg); color: #9a6700; }
+  .badge.neutral { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
+  .badge.rookie { background: var(--rook-bg); color: var(--rook); }
+  .rookie-toggle {
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--muted);
+    border-radius: 999px;
+    width: 22px; height: 22px;
+    font-size: 10px; font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+  }
+  .rookie-toggle.active { background: var(--rook-bg); color: var(--rook); border-color: var(--rook); }
+
+  .drafted-name { text-decoration: line-through; opacity: .6; }
+
+  tr.pick-range-row { background: var(--warn-bg); }
+  tr.pick-marker-row td {
+    background: var(--accent);
+    color: var(--accent-fg);
+    font-weight: 700;
+    font-size: 11.5px;
+    text-align: center;
+    letter-spacing: .02em;
+    padding: 6px 8px;
+  }
+
+  .tier-header td {
+    background: var(--bg);
+    font-weight: 700;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--muted);
+    padding-top: 10px;
+  }
+
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .toast {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 8px;
+    font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .2s;
+    z-index: 50;
+  }
+  .toast.show { opacity: 1; }
+  .file-btn { display: inline-block; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🏈 Fantasy Draft Day Analyzer</h1>
+  <p>Track picks live, find the best player available, watch each team's roster needs, and grade the draft as it happens.</p>
+</header>
+
+<nav class="tabs">
+  <button data-tab="setup" class="active">Setup</button>
+  <button data-tab="draft">Draft</button>
+  <button data-tab="teams">Teams &amp; Needs</button>
+  <button data-tab="grades">Grades</button>
+  <button data-tab="analysis">Analysis</button>
+</nav>
+
+<main>
+
+  <!-- SETUP TAB -->
+  <section class="tabpanel active" id="tab-setup">
+    <div class="panel">
+      <h2>League setup</h2>
+      <div class="row">
+        <div class="field">
+          <label for="numTeams">Number of teams</label>
+          <input type="number" id="numTeams" min="2" max="20" value="10">
+        </div>
+        <div class="field">
+          <label for="draftType">Draft order</label>
+          <select id="draftType">
+            <option value="snake">Snake (1-2-3...N, N...3-2-1, repeat)</option>
+            <option value="linear">Linear (1-2-3...N every round)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="yourTeam">Your team</label>
+          <select id="yourTeam"></select>
+        </div>
+      </div>
+      <button class="btn secondary btn-sm" id="applyTeamCount">Apply team count</button>
+
+      <h3>Team names</h3>
+      <div class="hint" style="margin-bottom:6px;">Numbering is the draft order (slot 1 picks first). Use ▲/▼ to reorder — already-drafted picks move with their team, only the draft slot changes.</div>
+      <div id="teamNamesList" class="field"></div>
+
+      <h3>Roster slots (per team)</h3>
+      <div class="row" id="rosterSlotInputs"></div>
+      <div class="hint">FLEX accepts RB, WR, or TE. BENCH accepts any position (overflow beyond bench size is still tracked, just flagged).</div>
+
+      <div style="margin-top:14px; display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn" id="saveSetupBtn">Save setup</button>
+        <button class="btn danger" id="resetDraftBtn">Reset draft (clear all picks)</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Player rankings</h2>
+      <p class="small muted">Import your own rankings/ADP as CSV (columns: <code>rank,name,position,team,bye</code> — header row optional, <code>team</code> and <code>bye</code> optional). Or load placeholder sample data to try the app out.</p>
+      <p class="small muted">On import, rookies are auto-tagged against a built-in list of this year's draft class — click the <strong>Rook</strong> badge for any player to correct or add one manually (this app has no live feed for it, so treat it as a best-effort starting point).</p>
+      <p class="small muted">Re-importing rankings (e.g. a refreshed ADP pull) replaces the player list, so it automatically re-matches whatever's still in the Projected points box below. Fetched injury data isn't re-applied automatically — re-click <strong>Fetch injury data</strong> after updating rankings.</p>
+      <div class="grid-2">
+        <div>
+          <label for="csvInput">Paste CSV</label>
+          <textarea id="csvInput" placeholder="rank,name,position,team,bye
+1,Sample Player A,RB,SAMP,7
+2,Sample Player B,WR,SAMP,9
+..."></textarea>
+          <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-sm" id="importCsvBtn">Import CSV</button>
+            <label class="btn secondary btn-sm file-btn">Upload CSV file
+              <input type="file" id="csvFile" accept=".csv,text/csv" style="display:none">
+            </label>
+            <button class="btn secondary btn-sm" id="loadSampleBtn">Load sample data</button>
+            <button class="btn danger btn-sm" id="clearRankingsBtn">Clear rankings</button>
+          </div>
+          <div class="hint" id="csvStatus"></div>
+          <div style="margin-top:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <button class="btn secondary btn-sm" id="fetchInjuriesBtn">Fetch injury data</button>
+          </div>
+          <div class="hint" id="injuryStatus"></div>
+        </div>
+        <div>
+          <label>Current rankings (<span id="rankingsCount">0</span> players)</label>
+          <div class="table-scroll" style="max-height:260px;">
+            <table>
+              <thead><tr><th>#</th><th>Name</th><th>Pos</th><th>Team</th><th>Bye</th><th>Pts</th><th>Inj</th><th>Rook</th></tr></thead>
+              <tbody id="rankingsPreview"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Projected points</h2>
+      <p class="small muted">Import per-player projected points as CSV (columns: <code>name,position,team,points</code> —
+        header row optional; <code>position</code>/<code>team</code> are optional but help disambiguate players who
+        share a last name). Matched to your rankings above by name — exact match first, then last name + first-initial
+        (handles sources that only show initials, e.g. "B. Robinson"), with team used to break ties. Team defenses match
+        by team + position instead of name. Re-importing replaces all previously matched points.</p>
+      <div class="grid-2">
+        <div>
+          <label for="projPtsInput">Paste CSV</label>
+          <textarea id="projPtsInput" placeholder="name,position,team,points
+Josh Allen,QB,BUF,337.44
+Bijan Robinson,RB,ATL,330.98
+..."></textarea>
+          <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-sm" id="importProjPtsBtn">Import projected points</button>
+            <label class="btn secondary btn-sm file-btn">Upload CSV file
+              <input type="file" id="projPtsFile" accept=".csv,text/csv" style="display:none">
+            </label>
+            <button class="btn danger btn-sm" id="clearProjPtsBtn">Clear projected points</button>
+          </div>
+          <div class="hint" id="projPtsStatus"></div>
+        </div>
+        <div>
+          <label>What this unlocks</label>
+          <p class="small muted">Once players have matched projected points, the <strong>Analysis</strong> tab shows
+            best players &amp; tiers per position and an NFL-team depth chart ranked by projection. The Draft and
+            Setup tables also show a Pts column.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DRAFT TAB -->
+  <section class="tabpanel" id="tab-draft">
+    <div class="clock-banner">
+      <div>
+        <div class="who" id="onClockWho">Add teams and rankings to start drafting</div>
+        <div class="meta" id="onClockMeta"></div>
+      </div>
+      <div class="row" style="max-width:260px; margin:0;">
+        <div class="field" style="margin:0;">
+          <label style="color:#fff; opacity:.85;">Drafting for (override, e.g. trades)</label>
+          <select id="draftingForOverride"></select>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Your picks by round</h2>
+      <p class="small muted">Your team's pick number in every round. For rounds already picked, shows what you took.
+        For rounds still ahead, shows who'd likely still be on the board <em>if the draft continues roughly in rank
+        order from here</em> — a chalk projection, not a guarantee, since real drafts deviate from rank.</p>
+      <div class="table-scroll" style="max-height:280px;">
+        <table>
+          <thead><tr><th>Round</th><th>Pick #</th><th>Picks away</th><th>Status</th></tr></thead>
+          <tbody id="yourPicksBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="grid-3">
+      <div class="panel">
+        <h2>Best available</h2>
+        <p class="small muted">The highlighted band marks the range where your next pick would land if the draft
+          goes in rank order from here, with a divider at the exact chalk spot — hidden while filtering by
+          position or searching, since the range only lines up against the full ranked list.</p>
+        <div class="filters" id="posFilters"></div>
+        <div style="display:flex; gap:6px;">
+          <input type="text" id="searchBox" placeholder="Search player name, or use voice..." style="flex:1;">
+          <button class="btn secondary btn-sm" id="voiceBtn" type="button" title='Say "draft &lt;player&gt;", "draft &lt;player&gt; for &lt;team&gt;", "switch to &lt;team&gt;", or "search &lt;player&gt;"'>🎤 Voice</button>
+        </div>
+        <div class="hint" id="voiceStatus"></div>
+        <div class="table-scroll" style="margin-top:10px;">
+          <table>
+            <thead><tr><th>Rk</th><th>Player</th><th>Pos</th><th>Team</th><th>Bye</th><th>Pts</th><th>Inj</th><th></th></tr></thead>
+            <tbody id="bestAvailableBody"></tbody>
+          </table>
+        </div>
+
+        <h3>Manual pick (player not in rankings)</h3>
+        <div class="row">
+          <input type="text" id="manualName" placeholder="Player name">
+          <select id="manualPos">
+            <option>QB</option><option>RB</option><option>WR</option><option>TE</option><option>DST</option><option>K</option>
+          </select>
+          <input type="text" id="manualTeam" placeholder="NFL team (optional)" style="max-width:140px;">
+          <button class="btn btn-sm" id="manualDraftBtn">Draft this player</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Draft log</h2>
+        <button class="btn secondary btn-sm" id="undoBtn">Undo last pick</button>
+        <button class="btn secondary btn-sm" id="exportCsvBtn">Export CSV</button>
+        <div class="table-scroll" style="margin-top:10px; max-height:520px;">
+          <table>
+            <thead><tr><th>#</th><th>Team</th><th>Player</th></tr></thead>
+            <tbody id="draftLogBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TEAMS TAB -->
+  <section class="tabpanel" id="tab-teams">
+    <div class="panel">
+      <h2>Bye week check</h2>
+      <p class="small muted">Flags weeks where overlapping bye weeks would leave this team short of rostered players at a starting position (based on players' bye weeks from your imported rankings).</p>
+      <div class="row" style="max-width:260px; margin-bottom:8px;">
+        <div class="field" style="margin:0;">
+          <label for="byeCheckTeam">Team</label>
+          <select id="byeCheckTeam"></select>
+        </div>
+      </div>
+      <div id="byeCheckOutput"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Teams &amp; roster needs</h2>
+      <p class="small muted">Open slots are highlighted. FLEX can be filled by RB/WR/TE; BENCH accepts any position.</p>
+      <div class="needs-grid" id="teamsGrid"></div>
+    </div>
+  </section>
+
+  <!-- GRADES TAB -->
+  <section class="tabpanel" id="tab-grades">
+    <div class="panel">
+      <h2>Draft grades</h2>
+      <p class="small muted">
+        Value = (pick number) − (player's rank at draft time). A positive value means the team got a player
+        who was ranked better than where they picked (a steal); negative means they picked a player ranked
+        worse than the slot (a reach). Grades are relative to the other teams in <em>this</em> draft, based
+        on average pick value. Manual/unranked picks aren't counted toward value.
+      </p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Team</th><th>Picks</th><th>Avg value</th><th>Grade</th><th>Best pick</th><th>Worst pick</th></tr></thead>
+          <tbody id="gradesBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ANALYSIS TAB -->
+  <section class="tabpanel" id="tab-analysis">
+    <div class="panel">
+      <h2>Best players &amp; tiers by position</h2>
+      <p class="small muted">Ranked by projected points (Setup tab &rarr; Projected points). Tier breaks are placed
+        automatically at the largest point-gaps within a position, so each tier is a group of players with roughly
+        interchangeable value.</p>
+      <div class="filters" id="analysisPosFilters"></div>
+      <div class="table-scroll" style="max-height:600px;">
+        <table>
+          <thead><tr><th>Tier</th><th>Player</th><th>Team</th><th>Bye</th><th>Proj Pts</th><th>Inj</th><th>Status</th></tr></thead>
+          <tbody id="tiersBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>NFL team depth charts</h2>
+      <p class="small muted">Every player with a team and projected points, grouped by NFL team and ranked within
+        each position by projection (e.g. RB1, RB2, ...). Useful for spotting backups worth handcuffing or crowded
+        timeshares to avoid.</p>
+      <div class="needs-grid" id="depthChartGrid"></div>
+    </div>
+  </section>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var STORAGE_KEY = "fantasyDraftAnalyzer.v1";
+  var ROSTER_ORDER = ["QB", "RB", "WR", "TE", "FLEX", "DST", "K", "BENCH"];
+  var FLEX_ELIGIBLE = ["RB", "WR", "TE"];
+  var STARTER_POSITIONS = ["QB", "RB", "WR", "TE", "DST", "K"];
+
+  var DEFAULT_ROSTER = { QB: 1, RB: 2, WR: 2, TE: 1, FLEX: 1, DST: 1, K: 1, BENCH: 6 };
+
+  var state = {
+    numTeams: 10,
+    draftType: "snake",
+    yourTeamIndex: 0,
+    teamNames: [],
+    rosterSlots: Object.assign({}, DEFAULT_ROSTER),
+    rankings: [],   // {rank, name, pos, team, bye, injury?: {status, detail}, projPts?: number}
+    picks: [],      // {pickNumber, teamIndex, name, pos, team, rank, manual}
+    posFilter: "ALL",
+    search: "",
+    injuriesFetchedAt: null,
+    analysisPosFilter: "RB"
+  };
+
+  function defaultTeamNames(n) {
+    var names = [];
+    for (var i = 0; i < n; i++) names.push("Team " + (i + 1));
+    return names;
+  }
+
+  function load() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      var saved = JSON.parse(raw);
+      Object.assign(state, saved);
+    } catch (e) { /* ignore corrupt storage */ }
+  }
+
+  function save() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+
+  function toast(msg) {
+    var el = document.getElementById("toast");
+    el.textContent = msg;
+    el.classList.add("show");
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { el.classList.remove("show"); }, 1800);
+  }
+
+  // ---------- CSV parsing ----------
+  function parseCsvLine(line) {
+    var out = [];
+    var cur = "";
+    var inQuotes = false;
+    for (var i = 0; i < line.length; i++) {
+      var c = line[i];
+      if (inQuotes) {
+        if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+        else if (c === '"') { inQuotes = false; }
+        else { cur += c; }
+      } else {
+        if (c === '"') inQuotes = true;
+        else if (c === ',') { out.push(cur); cur = ""; }
+        else cur += c;
+      }
+    }
+    out.push(cur);
+    return out.map(function (s) { return s.trim(); });
+  }
+
+  function normalizePos(p) {
+    p = (p || "").toUpperCase().trim();
+    if (p === "DEF" || p === "D/ST" || p === "DEFENSE") return "DST";
+    if (p === "PK") return "K";
+    return p;
+  }
+
+  function parseCsv(text) {
+    var lines = text.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) { return l.length; });
+    if (!lines.length) return { players: [], errors: ["No data found."] };
+
+    var first = parseCsvLine(lines[0]).map(function (s) { return s.toLowerCase(); });
+    var hasHeader = first.indexOf("name") !== -1 || first.indexOf("rank") !== -1 || first.indexOf("position") !== -1 ||
+      first.indexOf("pos") !== -1 || first.indexOf("overall") !== -1 || first.indexOf("adp") !== -1;
+
+    var colIdx = { rank: 0, name: 1, pos: 2, team: 3, bye: 4 };
+    var start = 0;
+    if (hasHeader) {
+      start = 1;
+      // Map every recognized header to its column, then pick the best match per field
+      // so a more specific column (e.g. "Overall") wins over a looser one (e.g. "ADP").
+      var headerMap = {};
+      first.forEach(function (h, i) { if (!(h in headerMap)) headerMap[h] = i; });
+      var pick = function () {
+        for (var a = 0; a < arguments.length; a++) {
+          if (arguments[a] in headerMap) return headerMap[arguments[a]];
+        }
+        return undefined;
+      };
+      colIdx = {
+        rank: pick("rank", "rk", "overall", "adp"),
+        name: pick("name", "player"),
+        pos: pick("position", "pos"),
+        team: pick("team", "nfl team", "tm"),
+        bye: pick("bye", "bye week")
+      };
+    }
+
+    var players = [];
+    var errors = [];
+    for (var i = start; i < lines.length; i++) {
+      var cols = parseCsvLine(lines[i]);
+      if (!cols.length || !cols.join("")) continue;
+      var name = colIdx.name !== undefined ? cols[colIdx.name] : cols[1];
+      if (!name) { errors.push("Line " + (i + 1) + ": missing name, skipped."); continue; }
+      var rankRaw = colIdx.rank !== undefined ? cols[colIdx.rank] : cols[0];
+      var rank = parseFloat(rankRaw);
+      players.push({
+        rank: isNaN(rank) ? (players.length + 1) : rank,
+        name: name,
+        pos: normalizePos(colIdx.pos !== undefined ? cols[colIdx.pos] : cols[2]),
+        team: (colIdx.team !== undefined ? cols[colIdx.team] : (cols[3] || "")) || "",
+        bye: (colIdx.bye !== undefined ? cols[colIdx.bye] : (cols[4] || "")) || "",
+        rookie: isKnownRookie(name)
+      });
+    }
+    players.sort(function (a, b) { return a.rank - b.rank; });
+    return { players: players, errors: errors };
+  }
+
+  function formatRank(r) {
+    return Number.isInteger(r) ? String(r) : r.toFixed(1);
+  }
+
+  // ---------- Rookie tagging ----------
+  // Best-effort static list of fantasy-relevant 2025 rookies — there's no live feed for this,
+  // so it's a starting point only. Matched by name at import time; wrong or missing entries
+  // are meant to be corrected via the Rook toggle in the rankings table, not fixed here per user.
+  var ROOKIE_NAMES = [
+    "Cam Ward", "Jaxson Dart", "Shedeur Sanders", "Tyler Shough", "Jalen Milroe",
+    "Dillon Gabriel", "Will Howard", "Quinn Ewers",
+    "Ashton Jeanty", "Omarion Hampton", "TreVeyon Henderson", "Quinshon Judkins",
+    "RJ Harvey", "Kaleb Johnson", "Bhayshul Tuten", "Woody Marks", "Cam Skattebo",
+    "Dylan Sampson", "Jaydon Blue", "DJ Giddens", "Jarquez Hunter", "Damien Martinez",
+    "Kyle Monangai", "LeQuint Allen", "Devin Neal", "Phil Mafah", "Brashard Smith",
+    "Tahj Brooks", "Trevor Etienne", "Jordan James",
+    "Tetairoa McMillan", "Emeka Egbuka", "Matthew Golden", "Luther Burden III",
+    "Jayden Higgins", "Tre Harris", "Jack Bech", "Jaylin Noel", "Isaiah Bond",
+    "Kyle Williams", "Elic Ayomanor", "Pat Bryant", "Jalen Royals", "Dont'e Thornton Jr.",
+    "Xavier Restrepo", "Zachariah Branch", "Isaac TeSlaa", "Savion Williams",
+    "Tory Horton", "Jaylin Lane", "Konata Mumpfield", "Ricky White",
+    "De'Zhaun Stribling",
+    "Tyler Warren", "Colston Loveland", "Mason Taylor", "Harold Fannin Jr.",
+    "Elijah Arroyo", "Gunnar Helm", "Terrance Ferguson", "Oronde Gadsden II",
+    "Jake Briningstool", "Robbie Ouzts", "Mitchell Evans"
+  ];
+  var ROOKIE_NAME_SET = null;
+  var ROOKIE_NAME_TOKENS = null;
+
+  // Built lazily on first use rather than at script-parse time, since it depends on
+  // NAME_SUFFIXES (a plain var assigned further down the file, not hoisted with its value).
+  function ensureRookieIndex() {
+    if (ROOKIE_NAME_SET) return;
+    ROOKIE_NAME_SET = {};
+    ROOKIE_NAME_TOKENS = [];
+    ROOKIE_NAMES.forEach(function (n) {
+      ROOKIE_NAME_SET[normalizeForMatch(n)] = true;
+      ROOKIE_NAME_TOKENS.push(stripNameSuffix(normalizeForMatch(n).split(/\s+/).filter(Boolean)));
+    });
+  }
+
+  function isKnownRookie(name) {
+    ensureRookieIndex();
+    var key = normalizeForMatch(name);
+    if (ROOKIE_NAME_SET[key]) return true;
+    var words = stripNameSuffix(key.split(/\s+/).filter(Boolean));
+    if (words.length < 2) return false;
+    var last = words[words.length - 1], first = words[0];
+    return ROOKIE_NAME_TOKENS.some(function (t) {
+      return t.length > 1 && t[t.length - 1] === last && t[0].indexOf(first) === 0;
+    });
+  }
+
+  function toggleRookie(index) {
+    var p = state.rankings[index];
+    if (!p) return;
+    p.rookie = !p.rookie;
+    save();
+    renderRankingsPreview();
+    renderDraft();
+    renderAnalysis();
+  }
+
+  function sampleCsv() {
+    var positions = ["RB", "WR", "RB", "WR", "QB", "TE", "RB", "WR", "WR", "RB",
+      "QB", "TE", "WR", "RB", "WR", "QB", "RB", "TE", "WR", "RB",
+      "DST", "K", "WR", "RB", "QB", "TE", "WR", "RB", "DST", "K"];
+    var lines = ["rank,name,position,team,bye"];
+    positions.forEach(function (pos, i) {
+      lines.push((i + 1) + ",Sample " + pos + " " + (i + 1) + "," + pos + ",SMP," + (1 + (i % 14)));
+    });
+    return lines.join("\n");
+  }
+
+  // ---------- Projected points CSV ----------
+  function parseProjPtsCsv(text) {
+    var lines = text.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) { return l.length; });
+    if (!lines.length) return { entries: [], errors: ["No data found."] };
+
+    var first = parseCsvLine(lines[0]).map(function (s) { return s.toLowerCase(); });
+    var hasHeader = first.indexOf("name") !== -1 || first.indexOf("player") !== -1 ||
+      first.indexOf("points") !== -1 || first.indexOf("pts") !== -1 || first.indexOf("position") !== -1;
+
+    var colIdx = { name: 0, pos: 1, team: 2, pts: 3 };
+    var start = 0;
+    if (hasHeader) {
+      start = 1;
+      var headerMap = {};
+      first.forEach(function (h, i) { if (!(h in headerMap)) headerMap[h] = i; });
+      var pick = function () {
+        for (var a = 0; a < arguments.length; a++) {
+          if (arguments[a] in headerMap) return headerMap[arguments[a]];
+        }
+        return undefined;
+      };
+      colIdx = {
+        name: pick("name", "player"),
+        pos: pick("position", "pos"),
+        team: pick("team", "nfl team", "tm"),
+        pts: pick("points", "pts", "proj pts", "proj_pts", "projpts", "projected points", "fpts", "projection")
+      };
+    }
+
+    var entries = [];
+    var errors = [];
+    for (var i = start; i < lines.length; i++) {
+      var cols = parseCsvLine(lines[i]);
+      if (!cols.length || !cols.join("")) continue;
+      var name = colIdx.name !== undefined ? cols[colIdx.name] : cols[0];
+      if (!name) { errors.push("Line " + (i + 1) + ": missing name, skipped."); continue; }
+      var ptsRaw = colIdx.pts !== undefined ? cols[colIdx.pts] : cols[3];
+      var pts = parseFloat(ptsRaw);
+      if (isNaN(pts)) { errors.push("Line " + (i + 1) + ": missing/invalid points, skipped."); continue; }
+      entries.push({
+        name: name,
+        pos: normalizePos(colIdx.pos !== undefined ? cols[colIdx.pos] : (cols[1] || "")),
+        team: (colIdx.team !== undefined ? cols[colIdx.team] : (cols[2] || "")) || "",
+        pts: pts
+      });
+    }
+    return { entries: entries, errors: errors };
+  }
+
+  // Generational suffixes (Jr, III, ...) sit as the trailing word, which would otherwise be
+  // mistaken for the surname by the last-word-as-surname heuristic below — drop them first.
+  var NAME_SUFFIXES = { jr: 1, sr: 1, ii: 1, iii: 1, iv: 1, v: 1 };
+  function stripNameSuffix(words) {
+    if (words.length > 1 && NAME_SUFFIXES[words[words.length - 1]]) return words.slice(0, -1);
+    return words;
+  }
+
+  // Matches projected-points rows onto state.rankings by name. Exact normalized match first;
+  // failing that, last-name + first-initial match (so sources that truncate first names, e.g.
+  // "B. Robinson", still resolve), with team used to break ties among same-surname players.
+  // Defenses match by team + position instead of name, since name formatting for defenses
+  // varies wildly between sources ("Broncos" vs "Denver Defense").
+  function mergeProjPts(list) {
+    state.rankings.forEach(function (p) { delete p.projPts; });
+    var matched = 0, ambiguous = 0;
+    list.forEach(function (entry) {
+      var isDst = entry.pos === "DST" || entry.pos === "DEF";
+      var candidates;
+      if (isDst && entry.team) {
+        var entryTeam = normalizeTeamAbbr(entry.team);
+        candidates = state.rankings.filter(function (p) {
+          return (p.pos === "DST" || p.pos === "DEF") && p.team && normalizeTeamAbbr(p.team) === entryTeam;
+        });
+      } else {
+        var key = normalizeForMatch(entry.name);
+        candidates = state.rankings.filter(function (p) { return normalizeForMatch(p.name) === key; });
+        if (!candidates.length) {
+          var eWords = stripNameSuffix(key.split(/\s+/).filter(Boolean));
+          if (eWords.length >= 2) {
+            var eLast = eWords[eWords.length - 1];
+            var eFirst = eWords[0];
+            candidates = state.rankings.filter(function (p) {
+              var pWords = stripNameSuffix(normalizeForMatch(p.name).split(/\s+/).filter(Boolean));
+              if (pWords.length < 2) return false;
+              var pLast = pWords[pWords.length - 1];
+              var pFirst = pWords[0];
+              return pLast === eLast && pFirst.indexOf(eFirst) === 0;
+            });
+          }
+        }
+      }
+      if (!candidates.length) return;
+      var chosen = candidates[0];
+      if (candidates.length > 1) {
+        var teamMatch = entry.team ? candidates.filter(function (c) {
+          return c.team && normalizeTeamAbbr(c.team) === normalizeTeamAbbr(entry.team);
+        }) : [];
+        if (teamMatch.length === 1) chosen = teamMatch[0];
+        else ambiguous++;
+      }
+      chosen.projPts = entry.pts;
+      matched++;
+    });
+    return { matched: matched, ambiguous: ambiguous, total: list.length };
+  }
+
+  // ---------- Tiering ----------
+  function mean(arr) { return arr.reduce(function (a, b) { return a + b; }, 0) / arr.length; }
+  function stddev(arr, m) {
+    var v = arr.reduce(function (a, b) { return a + (b - m) * (b - m); }, 0) / arr.length;
+    return Math.sqrt(v);
+  }
+
+  // Splits players (sorted desc by projPts) into tiers at the largest gaps: a gap starts a
+  // new tier once it exceeds the position's typical gap by more than one standard deviation.
+  function computeTiers(players) {
+    if (!players.length) return [];
+    if (players.length === 1) return [players.slice()];
+    var gaps = [];
+    for (var i = 1; i < players.length; i++) gaps.push(players[i - 1].projPts - players[i].projPts);
+    var m = mean(gaps), sd = stddev(gaps, m);
+    var threshold = Math.max(m + sd, m * 1.5, 1);
+    var tiers = [[players[0]]];
+    for (i = 1; i < players.length; i++) {
+      var gap = players[i - 1].projPts - players[i].projPts;
+      if (gap > threshold) tiers.push([]);
+      tiers[tiers.length - 1].push(players[i]);
+    }
+    return tiers;
+  }
+
+  // ---------- Injury data (Sleeper) ----------
+  // Sleeper's players API is public and free but still someone else's undocumented-ish
+  // service; endpoints/shapes can change without notice, hence the defensive parsing below.
+  var TEAM_ABBR_ALIASES = {
+    WAS: "WSH", JAC: "JAX", GNB: "GB", SFO: "SF", TAM: "TB", KAN: "KC",
+    NWE: "NE", NOR: "NO", LA: "LAR", STL: "LAR", SD: "LAC", OAK: "LV"
+  };
+  var INJURY_STATUS_RE = /^(out|doubtful|questionable|day-?to-?day|injured reserve|\bir\b|pup|physically unable to perform|suspended|probable|limited)$/i;
+
+  function normalizeTeamAbbr(a) {
+    a = String(a || "").toUpperCase().trim();
+    return TEAM_ABBR_ALIASES[a] || a;
+  }
+
+  function injuryBadgeClass(status) {
+    var s = String(status || "").toUpperCase().trim();
+    if (!s || s === "ACTIVE" || s === "PROBABLE") return "";
+    if (/OUT|RESERVE|\bIR\b|PUP|SUSPEND|DOUBTFUL/.test(s)) return "bad";
+    if (/QUESTIONABLE|DAY.TO.DAY|LIMITED/.test(s)) return "warn";
+    return "neutral";
+  }
+
+  function shortInjuryLabel(status) {
+    var s = String(status || "").toUpperCase();
+    if (/^OUT$/.test(s)) return "OUT";
+    if (/QUESTIONABLE/.test(s)) return "Q";
+    if (/DOUBTFUL/.test(s)) return "D";
+    if (/RESERVE|\bIR\b/.test(s)) return "IR";
+    if (/PUP|PHYSICALLY UNABLE/.test(s)) return "PUP";
+    if (/DAY.TO.DAY/.test(s)) return "DTD";
+    if (/SUSPEND/.test(s)) return "SUSP";
+    return status;
+  }
+
+  function injuryBadgeHtml(injury) {
+    if (!injury || !injury.status) return "";
+    var cls = injuryBadgeClass(injury.status);
+    if (!cls) return "";
+    var title = injury.detail ? (injury.status + " — " + injury.detail) : injury.status;
+    return "<span class='badge " + cls + "' title='" + escapeHtml(title) + "'>" + escapeHtml(shortInjuryLabel(injury.status)) + "</span>";
+  }
+
+  function rookieBadgeHtml(p) {
+    if (!p || !p.rookie) return "";
+    return " <span class='badge rookie' title='Tagged as a rookie (best-effort, see Setup tab)'>R</span>";
+  }
+
+  // Returns {ok:true, data} or {ok:false, error} — never throws — so callers can tell
+  // a network/CORS block (fetch itself rejects) apart from an unexpected response shape.
+  function fetchJson(url) {
+    return fetch(url).then(function (resp) {
+      if (!resp.ok) return { ok: false, error: "HTTP " + resp.status };
+      return resp.json().then(function (data) {
+        return { ok: true, data: data };
+      }).catch(function (e) {
+        return { ok: false, error: "response wasn't valid JSON (" + e.message + ")" };
+      });
+    }).catch(function (err) {
+      var msg = (err && err.message) || String(err);
+      console.warn("Injury data fetch failed for", url, err);
+      return { ok: false, error: msg };
+    });
+  }
+
+  // Sleeper's public players endpoint: a single JSON object keyed by player_id, each with
+  // injury_status/injury_body_part fields. No API key, and (unlike ESPN's site API) it's
+  // meant for exactly this kind of third-party client-side use.
+  function extractInjuriesFromSleeper(data) {
+    var out = [];
+    if (!data || typeof data !== "object") return out;
+    Object.keys(data).forEach(function (id) {
+      var p = data[id];
+      if (!p || !p.injury_status) return;
+      var name = p.full_name || ((p.first_name || "") + " " + (p.last_name || "")).trim();
+      if (!name) return;
+      out.push({
+        name: name,
+        status: p.injury_status,
+        detail: p.injury_body_part || p.injury_notes || "",
+        team: p.team || ""
+      });
+    });
+    return out;
+  }
+
+  // Generic fallback in case Sleeper's field names change: walk the response looking for
+  // any object with a name-like field and a status-like field matching a known injury term.
+  function scanForInjuries(node, results, depth) {
+    if (!node || depth > 8 || results.length > 500) return;
+    if (Array.isArray(node)) {
+      node.forEach(function (item) { scanForInjuries(item, results, depth + 1); });
+      return;
+    }
+    if (typeof node !== "object") return;
+    var name = node.full_name || node.displayName || node.fullName ||
+      (node.athlete && (node.athlete.displayName || node.athlete.fullName));
+    var status = typeof node.injury_status === "string" ? node.injury_status :
+      typeof node.status === "string" ? node.status :
+      (node.type && typeof node.type.description === "string" ? node.type.description : null);
+    if (name && status && INJURY_STATUS_RE.test(status.trim()) && status.trim().toLowerCase() !== "active") {
+      results.push({
+        name: name, status: status,
+        detail: node.injury_body_part || node.injury_notes || (node.details && (node.details.detail || node.details.type)) || ""
+      });
+    }
+    Object.keys(node).forEach(function (k) { scanForInjuries(node[k], results, depth + 1); });
+  }
+
+  function mergeInjuries(list) {
+    var idx = {};
+    list.forEach(function (inj) {
+      var key = normalizeForMatch(inj.name);
+      if (!key) return;
+      idx[key] = idx[key] || [];
+      idx[key].push(inj);
+    });
+    var matched = 0;
+    state.rankings.forEach(function (p) {
+      var candidates = idx[normalizeForMatch(p.name)];
+      if (!candidates || !candidates.length) { delete p.injury; return; }
+      var chosen = candidates[0];
+      if (candidates.length > 1 && p.team) {
+        var teamMatch = candidates.filter(function (c) { return normalizeTeamAbbr(c.team) === normalizeTeamAbbr(p.team); });
+        if (teamMatch.length) chosen = teamMatch[0];
+      }
+      p.injury = { status: chosen.status, detail: chosen.detail || "" };
+      matched++;
+    });
+    return matched;
+  }
+
+  async function fetchInjuries() {
+    if (!state.rankings.length) { toast("Import rankings first."); return; }
+    var btn = el("fetchInjuriesBtn");
+    var status = el("injuryStatus");
+    btn.disabled = true;
+    status.textContent = "Fetching injury data from Sleeper...";
+    try {
+      var result = await fetchJson("https://api.sleeper.app/v1/players/nfl");
+      if (!result.ok) {
+        throw new Error("your browser blocked the request (" + result.error +
+          ") — likely a CORS or network restriction on this page's origin (" + location.origin + ")");
+      }
+      console.log("[injury debug] sleeper player count:", Object.keys(result.data || {}).length);
+
+      var allInjuries = extractInjuriesFromSleeper(result.data);
+      if (!allInjuries.length) {
+        // Sleeper's shape may have changed — fall back to a generic scan before giving up.
+        var scanned = [];
+        scanForInjuries(result.data, scanned, 0);
+        allInjuries = scanned;
+      }
+      console.log("[injury debug] injuries found:", allInjuries.length, allInjuries.slice(0, 10));
+
+      var matched = mergeInjuries(allInjuries);
+      console.log("[injury debug] matched", matched, "of", state.rankings.length, "rankings");
+      state.injuriesFetchedAt = new Date().toISOString();
+      save();
+      renderRankingsPreview();
+      renderDraft();
+      status.textContent = "Fetched " + allInjuries.length + " injury designation(s) from Sleeper — matched to " +
+        matched + " of your " + state.rankings.length + " players. Last updated " +
+        new Date(state.injuriesFetchedAt).toLocaleString() + ".";
+      toast("Injury data updated: " + matched + " players matched.");
+    } catch (err) {
+      status.textContent = "Couldn't fetch injury data: " + (err && err.message ? err.message : err) + ".";
+      toast("Injury fetch failed.");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ---------- Draft order ----------
+  function teamIndexForPick(pickNumber) {
+    var n = state.numTeams;
+    if (n <= 0) return 0;
+    var zeroBased = pickNumber - 1;
+    var round = Math.floor(zeroBased / n);
+    var posInRound = zeroBased % n;
+    if (state.draftType === "snake" && round % 2 === 1) {
+      return n - 1 - posInRound;
+    }
+    return posInRound;
+  }
+
+  function roundAndPickInRound(pickNumber) {
+    var n = state.numTeams;
+    var zeroBased = pickNumber - 1;
+    return { round: Math.floor(zeroBased / n) + 1, pickInRound: (zeroBased % n) + 1 };
+  }
+
+  // The overall pick number at which a given team is on the clock in a given round.
+  function pickNumberForTeamInRound(teamIdx, round) {
+    var n = state.numTeams;
+    if (n <= 0) return null;
+    var start = (round - 1) * n + 1;
+    for (var i = 0; i < n; i++) {
+      var pickNum = start + i;
+      if (teamIndexForPick(pickNum) === teamIdx) return pickNum;
+    }
+    return null;
+  }
+
+  // Total rounds = total roster spots per team, since each team picks once per round.
+  function totalRoundsForRoster() {
+    return ROSTER_ORDER.reduce(function (sum, slot) { return sum + (state.rosterSlots[slot] || 0); }, 0);
+  }
+
+  // The next overall pick number (>= fromPickNumber) at which teamIdx is on the clock,
+  // including fromPickNumber itself if it's already their turn.
+  function nextPickNumberForTeam(teamIdx, fromPickNumber) {
+    if (state.numTeams <= 0) return null;
+    var pickNum = fromPickNumber;
+    for (var i = 0; i < state.numTeams * 2; i++) {
+      if (teamIndexForPick(pickNum) === teamIdx) return pickNum;
+      pickNum++;
+    }
+    return null;
+  }
+
+  // ---------- Roster slot assignment ----------
+  function emptyRosterCounts() {
+    var counts = {};
+    ROSTER_ORDER.forEach(function (slot) { counts[slot] = 0; });
+    return counts;
+  }
+
+  function teamRosters() {
+    var rosters = [];
+    for (var t = 0; t < state.numTeams; t++) {
+      rosters.push({ counts: emptyRosterCounts(), players: [] });
+    }
+    state.picks.forEach(function (pick) {
+      var r = rosters[pick.teamIndex];
+      if (!r) return;
+      var slot = assignSlotForPick(r.counts, pick.pos);
+      r.counts[slot] = (r.counts[slot] || 0) + 1;
+      r.players.push(Object.assign({ slot: slot }, pick));
+    });
+    return rosters;
+  }
+
+  function assignSlotForPick(counts, pos) {
+    var slots = state.rosterSlots;
+    if (STARTER_POSITIONS.indexOf(pos) !== -1 && counts[pos] < (slots[pos] || 0)) {
+      return pos;
+    }
+    if (FLEX_ELIGIBLE.indexOf(pos) !== -1 && counts.FLEX < (slots.FLEX || 0)) {
+      return "FLEX";
+    }
+    return "BENCH"; // overflow allowed past configured bench size, still tracked
+  }
+
+  // ---------- Rendering ----------
+  function el(id) { return document.getElementById(id); }
+
+  function renderTabs() {
+    document.querySelectorAll("nav.tabs button").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        document.querySelectorAll("nav.tabs button").forEach(function (b) { b.classList.remove("active"); });
+        document.querySelectorAll(".tabpanel").forEach(function (p) { p.classList.remove("active"); });
+        btn.classList.add("active");
+        el("tab-" + btn.dataset.tab).classList.add("active");
+        if (btn.dataset.tab === "teams") renderTeams();
+        if (btn.dataset.tab === "grades") renderGrades();
+        if (btn.dataset.tab === "draft") renderDraft();
+        if (btn.dataset.tab === "analysis") renderAnalysis();
+      });
+    });
+  }
+
+  function renderSetupInputs() {
+    el("numTeams").value = state.numTeams;
+    el("draftType").value = state.draftType;
+
+    var yourSel = el("yourTeam");
+    yourSel.innerHTML = "";
+    state.teamNames.forEach(function (name, i) {
+      var opt = document.createElement("option");
+      opt.value = i; opt.textContent = name;
+      if (i === state.yourTeamIndex) opt.selected = true;
+      yourSel.appendChild(opt);
+    });
+
+    var namesList = el("teamNamesList");
+    namesList.innerHTML = "";
+    state.teamNames.forEach(function (name, i) {
+      var wrap = document.createElement("div");
+      wrap.style.display = "flex"; wrap.style.gap = "6px"; wrap.style.marginBottom = "6px"; wrap.style.alignItems = "center";
+      var order = document.createElement("span");
+      order.className = "muted small"; order.style.width = "18px"; order.style.flexShrink = "0";
+      order.textContent = (i + 1) + ".";
+      var input = document.createElement("input");
+      input.type = "text"; input.value = name; input.style.flex = "1";
+      input.addEventListener("change", function () {
+        state.teamNames[i] = input.value.trim() || ("Team " + (i + 1));
+        save(); renderAllTeamSelectors();
+      });
+      var upBtn = document.createElement("button");
+      upBtn.className = "btn secondary btn-sm"; upBtn.type = "button"; upBtn.textContent = "▲";
+      upBtn.title = "Move up in draft order";
+      upBtn.disabled = i === 0;
+      upBtn.addEventListener("click", function () { moveTeam(i, -1); });
+      var downBtn = document.createElement("button");
+      downBtn.className = "btn secondary btn-sm"; downBtn.type = "button"; downBtn.textContent = "▼";
+      downBtn.title = "Move down in draft order";
+      downBtn.disabled = i === state.teamNames.length - 1;
+      downBtn.addEventListener("click", function () { moveTeam(i, 1); });
+      wrap.appendChild(order); wrap.appendChild(input); wrap.appendChild(upBtn); wrap.appendChild(downBtn);
+      namesList.appendChild(wrap);
+    });
+
+    var rosterWrap = el("rosterSlotInputs");
+    rosterWrap.innerHTML = "";
+    ROSTER_ORDER.forEach(function (slot) {
+      var field = document.createElement("div");
+      field.className = "field";
+      var label = document.createElement("label");
+      label.textContent = slot;
+      var input = document.createElement("input");
+      input.type = "number"; input.min = "0"; input.max = "10";
+      input.value = state.rosterSlots[slot];
+      input.addEventListener("change", function () {
+        state.rosterSlots[slot] = Math.max(0, parseInt(input.value, 10) || 0);
+        save(); renderTeams(); renderGrades();
+      });
+      field.appendChild(label); field.appendChild(input);
+      rosterWrap.appendChild(field);
+    });
+  }
+
+  function renderAllTeamSelectors() {
+    var yourSel = el("yourTeam");
+    var cur = yourSel.value;
+    yourSel.innerHTML = "";
+    state.teamNames.forEach(function (name, i) {
+      var opt = document.createElement("option");
+      opt.value = i; opt.textContent = name;
+      yourSel.appendChild(opt);
+    });
+    yourSel.value = cur;
+
+    var override = el("draftingForOverride");
+    var curO = override.value;
+    override.innerHTML = "";
+    state.teamNames.forEach(function (name, i) {
+      var opt = document.createElement("option");
+      opt.value = i; opt.textContent = name;
+      override.appendChild(opt);
+    });
+    if (curO !== "") override.value = curO;
+  }
+
+  function renderRankingsPreview() {
+    el("rankingsCount").textContent = state.rankings.length;
+    var body = el("rankingsPreview");
+    body.innerHTML = "";
+    state.rankings.slice(0, 300).forEach(function (p, i) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = "<td>" + formatRank(p.rank) + "</td><td>" + escapeHtml(p.name) + "</td>" +
+        "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>" +
+        "<td>" + escapeHtml(p.bye) + "</td>" +
+        "<td>" + (typeof p.projPts === "number" ? p.projPts.toFixed(1) : "") + "</td>" +
+        "<td>" + injuryBadgeHtml(p.injury) + "</td>" +
+        "<td></td>";
+      var tdRook = tr.lastElementChild;
+      var btn = document.createElement("button");
+      btn.className = "rookie-toggle" + (p.rookie ? " active" : "");
+      btn.type = "button";
+      btn.textContent = "R";
+      btn.title = p.rookie ? "Marked as rookie — click to unmark" : "Not marked as rookie — click to mark";
+      btn.addEventListener("click", function () { toggleRookie(i); });
+      tdRook.appendChild(btn);
+      body.appendChild(tr);
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s || "").replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function draftedNameSet() {
+    var s = new Set();
+    state.picks.forEach(function (p) { s.add(p.name.toLowerCase()); });
+    return s;
+  }
+
+  // ---------- Voice mode ----------
+  function normalizeForMatch(s) {
+    return String(s || "").toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+  }
+
+  function findPlayerMatches(query) {
+    var q = normalizeForMatch(query);
+    if (!q) return [];
+    var drafted = draftedNameSet();
+    var qWords = q.split(/\s+/).filter(Boolean);
+    var scored = [];
+    state.rankings.forEach(function (p) {
+      if (drafted.has(p.name.toLowerCase())) return;
+      var name = normalizeForMatch(p.name);
+      var score;
+      if (name === q) score = 0;
+      else if (name.indexOf(q) !== -1) score = 1;
+      else if (qWords.every(function (qw) {
+        return name.split(/\s+/).some(function (nw) { return nw.indexOf(qw) === 0; });
+      })) score = 2;
+      else return;
+      scored.push({ p: p, score: score });
+    });
+    scored.sort(function (a, b) { return a.score !== b.score ? a.score - b.score : a.p.rank - b.p.rank; });
+    return scored.map(function (s) { return s.p; });
+  }
+
+  function setSearch(q) {
+    state.search = q;
+    el("searchBox").value = q;
+    renderDraft();
+  }
+
+  function findTeamIndex(query) {
+    var q = normalizeForMatch(query);
+    if (!q) return -1;
+    if (q === "me" || q === "my team" || q === "myself" || q === "us") return state.yourTeamIndex;
+    for (var i = 0; i < state.teamNames.length; i++) {
+      if (normalizeForMatch(state.teamNames[i]) === q) return i;
+    }
+    var numMatch = q.match(/^(?:team\s*)?(\d+)$/);
+    if (numMatch) {
+      var n = parseInt(numMatch[1], 10) - 1;
+      if (n >= 0 && n < state.teamNames.length) return n;
+    }
+    for (var j = 0; j < state.teamNames.length; j++) {
+      if (normalizeForMatch(state.teamNames[j]).indexOf(q) !== -1) return j;
+    }
+    return -1;
+  }
+
+  function draftForTeam(playerQuery, teamQuery) {
+    var teamIdx = findTeamIndex(teamQuery);
+    if (teamIdx === -1) { toast('Voice: no team matches "' + teamQuery + '"'); return; }
+    var matches = findPlayerMatches(playerQuery);
+    if (!matches.length) { toast('Voice: no available match for "' + playerQuery + '"'); return; }
+    draftPlayer(matches[0], false, teamIdx);
+    setSearch("");
+    toast("Voice draft: " + matches[0].name + " → " + (state.teamNames[teamIdx] || ("Team " + (teamIdx + 1))));
+  }
+
+  function handleVoiceTranscript(transcript) {
+    var t = transcript.trim();
+    var lower = t.toLowerCase();
+    var m;
+
+    m = lower.match(/^(?:draft|pick|take)\s+(.+?)\s+for\s+(.+)$/);
+    if (m) { draftForTeam(m[1], m[2]); return; }
+
+    m = lower.match(/^(.+?)\s+(?:drafts?|picks?|takes?)\s+(.+)$/);
+    if (m && findTeamIndex(m[1]) !== -1) { draftForTeam(m[2], m[1]); return; }
+
+    m = lower.match(/^(?:switch to|drafting for|now drafting for|for)\s+(.+)$/);
+    if (m) {
+      var switchIdx = findTeamIndex(m[1]);
+      if (switchIdx === -1) { toast('Voice: no team matches "' + m[1] + '"'); return; }
+      el("draftingForOverride").value = switchIdx;
+      toast("Now drafting for: " + (state.teamNames[switchIdx] || ("Team " + (switchIdx + 1))));
+      return;
+    }
+
+    m = lower.match(/^(?:draft|pick|take)\s+(.+)$/);
+    if (m) {
+      var matches = findPlayerMatches(m[1]);
+      if (!matches.length) { toast('Voice: no available match for "' + m[1] + '"'); return; }
+      draftPlayer(matches[0], false);
+      setSearch("");
+      toast("Voice draft: " + matches[0].name);
+      return;
+    }
+    m = lower.match(/^(?:search|find|show)\s+(.+)$/);
+    if (m) { setSearch(m[1]); toast('Voice search: "' + m[1] + '"'); return; }
+    if (lower === "clear search" || lower === "clear") { setSearch(""); toast("Search cleared."); return; }
+    m = lower.match(/^(?:position|pos|filter)\s+(qb|rb|wr|te|dst|k|all)$/);
+    if (m) {
+      state.posFilter = m[1].toUpperCase();
+      renderDraft();
+      toast("Filter: " + state.posFilter);
+      return;
+    }
+    setSearch(t);
+    toast('Voice search: "' + t + '"');
+  }
+
+  function initVoice() {
+    var micBtn = el("voiceBtn");
+    var status = el("voiceStatus");
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      micBtn.disabled = true;
+      micBtn.title = "Voice input isn't supported in this browser (try Chrome or Edge).";
+      status.textContent = "Voice input isn't supported in this browser.";
+      return;
+    }
+    var recognition = new SR();
+    var recognizing = false;
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = "en-US";
+    recognition.maxAlternatives = 1;
+
+    recognition.addEventListener("start", function () {
+      recognizing = true;
+      micBtn.classList.add("listening");
+      micBtn.textContent = "🎙️ Listening…";
+      status.textContent = 'Listening — try "draft <player>", "draft <player> for <team>", or "switch to <team>"...';
+    });
+    recognition.addEventListener("result", function (e) {
+      var transcript = e.results[0][0].transcript;
+      status.textContent = 'Heard: "' + transcript + '"';
+      handleVoiceTranscript(transcript);
+    });
+    recognition.addEventListener("error", function (e) {
+      status.textContent = e.error === "not-allowed" ?
+        "Microphone access denied." : "Voice error: " + e.error;
+    });
+    recognition.addEventListener("end", function () {
+      recognizing = false;
+      micBtn.classList.remove("listening");
+      micBtn.textContent = "🎤 Voice";
+    });
+
+    micBtn.addEventListener("click", function () {
+      if (recognizing) { recognition.stop(); return; }
+      try { recognition.start(); } catch (e) { /* recognition already starting */ }
+    });
+  }
+
+  function renderPosFilters() {
+    var wrap = el("posFilters");
+    wrap.innerHTML = "";
+    ["ALL"].concat(STARTER_POSITIONS).forEach(function (pos) {
+      var btn = document.createElement("button");
+      btn.textContent = pos;
+      if (pos === state.posFilter) btn.classList.add("active");
+      btn.addEventListener("click", function () {
+        state.posFilter = pos;
+        renderDraft();
+      });
+      wrap.appendChild(btn);
+    });
+  }
+
+  // For each round, your team's pick number, and either what you actually took (if that pick
+  // has already happened) or a "chalk" projection of who'd still be on the board — the Nth
+  // still-undrafted player by rank, where N = how many total picks (by any team) happen
+  // between now and yours. That's a best-case reference point, not a real prediction: it
+  // assumes every pick between now and then goes in rank order, which real drafts rarely do.
+  function renderYourPicks(drafted) {
+    var tbody = el("yourPicksBody");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+    if (state.numTeams <= 0 || !state.teamNames.length) {
+      tbody.innerHTML = "<tr><td colspan='4' class='muted'>Set up teams first.</td></tr>";
+      return;
+    }
+    var rounds = totalRoundsForRoster();
+    if (!rounds) {
+      tbody.innerHTML = "<tr><td colspan='4' class='muted'>Set roster slots on the Setup tab first.</td></tr>";
+      return;
+    }
+    var currentPickCount = state.picks.length;
+    var undrafted = state.rankings.filter(function (p) { return !drafted.has(p.name.toLowerCase()); });
+
+    for (var r = 1; r <= rounds; r++) {
+      var pickNum = pickNumberForTeamInRound(state.yourTeamIndex, r);
+      if (pickNum === null) continue;
+      var tr = document.createElement("tr");
+      var statusHtml;
+      if (pickNum <= currentPickCount) {
+        var made = state.picks.filter(function (p) { return p.pickNumber === pickNum; })[0];
+        if (made) {
+          var offSlot = made.teamIndex !== state.yourTeamIndex;
+          statusHtml = "<span class='badge good'>" + escapeHtml(made.name) + "</span> " +
+            "<span class='pos-pill pos-" + made.pos + "'>" + made.pos + "</span>" +
+            (offSlot ? " <span class='hint'>(picked by " + escapeHtml(state.teamNames[made.teamIndex] || "another team") + ")</span>" : "");
+        } else {
+          statusHtml = "<span class='muted'>—</span>";
+        }
+      } else {
+        var picksAway = pickNum - (currentPickCount + 1);
+        var chalk = undrafted[picksAway];
+        if (!chalk) {
+          statusHtml = "<span class='muted'>Rankings run out before this pick.</span>";
+        } else {
+          var alt1 = undrafted[picksAway + 1], alt2 = undrafted[picksAway + 2];
+          var altNames = [alt1, alt2].filter(Boolean).map(function (p) { return escapeHtml(p.name); }).join(", ");
+          statusHtml = "<span class='pos-pill pos-" + chalk.pos + "'>" + chalk.pos + "</span> " +
+            escapeHtml(chalk.name) +
+            (typeof chalk.projPts === "number" ? " <span class='muted small'>(" + chalk.projPts.toFixed(1) + " pts)</span>" : "") +
+            (altNames ? "<div class='hint'>or: " + altNames + "</div>" : "");
+        }
+      }
+      var isNextForYou = pickNum === currentPickCount + 1;
+      tr.innerHTML = "<td>" + r + "</td><td>" + pickNum + (isNextForYou ? " <span class='badge warn'>next</span>" : "") + "</td>" +
+        "<td>" + Math.max(0, pickNum - (currentPickCount + 1)) + "</td><td>" + statusHtml + "</td>";
+      tbody.appendChild(tr);
+    }
+  }
+
+  function renderDraft() {
+    renderAllTeamSelectors();
+    renderPosFilters();
+
+    var totalPicks = state.picks.length;
+    var pickNumber = totalPicks + 1;
+    var onClockIdx = state.numTeams > 0 ? teamIndexForPick(pickNumber) : 0;
+    var rp = roundAndPickInRound(pickNumber);
+
+    if (state.numTeams > 0 && state.teamNames.length === state.numTeams) {
+      el("onClockWho").textContent = "On the clock: " + state.teamNames[onClockIdx] +
+        (onClockIdx === state.yourTeamIndex ? " (you)" : "");
+      el("onClockMeta").textContent = "Pick #" + pickNumber + " — Round " + rp.round + ", Pick " + rp.pickInRound + " of " + state.numTeams;
+      el("draftingForOverride").value = onClockIdx;
+    } else {
+      el("onClockWho").textContent = "Set up teams first";
+      el("onClockMeta").textContent = "";
+    }
+
+    var drafted = draftedNameSet();
+    renderYourPicks(drafted);
+
+    var search = state.search.toLowerCase();
+    var body = el("bestAvailableBody");
+    body.innerHTML = "";
+
+    // Where your next pick would land if the draft goes in rank order from here, plus a band
+    // of rows around it as the realistic range — only meaningful against the unfiltered,
+    // rank-ordered list, so it's suppressed while a position filter or search is active.
+    var showPickMarker = state.posFilter === "ALL" && !search && state.numTeams > 0;
+    var picksAway = null, bandHalf = 0;
+    if (showPickMarker) {
+      var nextPickNum = nextPickNumberForTeam(state.yourTeamIndex, totalPicks + 1);
+      if (nextPickNum !== null) {
+        picksAway = nextPickNum - (totalPicks + 1);
+        bandHalf = Math.max(1, Math.ceil(state.numTeams / 2));
+      }
+    }
+
+    var shown = 0;
+    var idx = 0; // position within the undrafted, rank-ordered list (matches picksAway's units)
+    for (var i = 0; i < state.rankings.length && shown < 200; i++) {
+      var p = state.rankings[i];
+      if (drafted.has(p.name.toLowerCase())) continue;
+      if (state.posFilter !== "ALL" && p.pos !== state.posFilter) continue;
+      if (search && p.name.toLowerCase().indexOf(search) === -1) continue;
+
+      if (picksAway !== null && idx === picksAway) {
+        var marker = document.createElement("tr");
+        marker.className = "pick-marker-row";
+        marker.innerHTML = "<td colspan='8'>▼ Your next pick — Pick #" + nextPickNum + " (in " +
+          picksAway + " pick" + (picksAway === 1 ? "" : "s") + ") — chalk if the draft goes in rank order ▼</td>";
+        body.appendChild(marker);
+      }
+
+      shown++;
+      var tr = document.createElement("tr");
+      if (picksAway !== null && Math.abs(idx - picksAway) <= bandHalf) tr.classList.add("pick-range-row");
+      var tdBtn = document.createElement("td");
+      var btn = document.createElement("button");
+      btn.className = "btn btn-sm"; btn.textContent = "Draft";
+      btn.disabled = state.numTeams <= 0;
+      (function (player) {
+        btn.addEventListener("click", function () { draftPlayer(player, false); });
+      })(p);
+      tdBtn.appendChild(btn);
+      tr.innerHTML = "<td>" + formatRank(p.rank) + "</td><td>" + escapeHtml(p.name) + rookieBadgeHtml(p) + "</td>" +
+        "<td><span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span></td><td>" + escapeHtml(p.team) + "</td>" +
+        "<td>" + escapeHtml(p.bye) + "</td>" +
+        "<td>" + (typeof p.projPts === "number" ? p.projPts.toFixed(1) : "") + "</td>" +
+        "<td>" + injuryBadgeHtml(p.injury) + "</td>";
+      tr.appendChild(tdBtn);
+      body.appendChild(tr);
+      idx++;
+    }
+
+    var logBody = el("draftLogBody");
+    logBody.innerHTML = "";
+    for (var j = state.picks.length - 1; j >= 0; j--) {
+      var pick = state.picks[j];
+      var tr2 = document.createElement("tr");
+      tr2.innerHTML = "<td>" + pick.pickNumber + "</td><td>" + escapeHtml(state.teamNames[pick.teamIndex] || ("Team " + (pick.teamIndex + 1))) + "</td>" +
+        "<td>" + escapeHtml(pick.name) + " <span class='pos-pill pos-" + pick.pos + "'>" + pick.pos + "</span>" +
+        (pick.manual ? " <span class='badge neutral'>unranked</span>" : "") + "</td>";
+      logBody.appendChild(tr2);
+    }
+
+    el("undoBtn").disabled = state.picks.length === 0;
+  }
+
+  function draftPlayer(player, manual, teamIdxOverride) {
+    if (state.numTeams <= 0) { toast("Set up teams first."); return; }
+    var pickNumber = state.picks.length + 1;
+    var teamIdx;
+    if (typeof teamIdxOverride === "number") {
+      teamIdx = teamIdxOverride;
+    } else {
+      var overrideVal = el("draftingForOverride").value;
+      teamIdx = overrideVal !== "" ? parseInt(overrideVal, 10) : teamIndexForPick(pickNumber);
+    }
+    state.picks.push({
+      pickNumber: pickNumber,
+      teamIndex: teamIdx,
+      name: player.name,
+      pos: player.pos,
+      team: player.team || "",
+      rank: manual ? null : player.rank,
+      manual: !!manual
+    });
+    save();
+    renderDraft();
+    renderTeams();
+    renderGrades();
+    toast("Drafted " + player.name);
+  }
+
+  function renderTeams() {
+    renderByeCheck();
+    var rosters = teamRosters();
+    var grid = el("teamsGrid");
+    grid.innerHTML = "";
+    for (var t = 0; t < state.numTeams; t++) {
+      var card = document.createElement("div");
+      card.className = "team-card";
+      var name = state.teamNames[t] || ("Team " + (t + 1));
+      var isYou = t === state.yourTeamIndex;
+      var h4 = document.createElement("h4");
+      h4.innerHTML = escapeHtml(name) + (isYou ? " <span class='badge good'>you</span>" : "");
+      card.appendChild(h4);
+
+      var roster = rosters[t] || { counts: emptyRosterCounts(), players: [] };
+      var byPlayerForSlot = {};
+      roster.players.forEach(function (p) {
+        byPlayerForSlot[p.slot] = byPlayerForSlot[p.slot] || [];
+        byPlayerForSlot[p.slot].push(p);
+      });
+
+      ROSTER_ORDER.forEach(function (slot) {
+        var required = state.rosterSlots[slot] || 0;
+        var filled = byPlayerForSlot[slot] || [];
+        var displayCount = Math.max(required, filled.length);
+        for (var i = 0; i < displayCount; i++) {
+          var row = document.createElement("div");
+          var player = filled[i];
+          row.className = "slot-row " + (player ? "filled" : "open");
+          var label = i < required ? slot : slot + "*";
+          row.innerHTML = "<span class='slot-name'>" + label + "</span><span>" +
+            (player ? escapeHtml(player.name) : "<span class='muted'>OPEN</span>") + "</span>";
+          card.appendChild(row);
+        }
+      });
+      grid.appendChild(card);
+    }
+  }
+
+  // ---------- Bye week check ----------
+  // Picks don't store bye week (it's not needed for grading), so look it up from the
+  // imported rankings by name when analyzing a roster.
+  function byeWeekByName() {
+    var idx = {};
+    state.rankings.forEach(function (p) {
+      idx[normalizeForMatch(p.name)] = p.bye;
+    });
+    return idx;
+  }
+
+  function computeByeWeekIssues(teamIndex) {
+    var roster = teamRosters()[teamIndex];
+    if (!roster) return [];
+    var byeIdx = byeWeekByName();
+
+    var withBye = roster.players.map(function (p) {
+      var bye = byeIdx[normalizeForMatch(p.name)];
+      bye = bye && String(bye).trim() ? String(bye).trim() : null;
+      return { name: p.name, pos: p.pos, bye: bye };
+    }).filter(function (p) { return p.bye; });
+
+    var byWeek = {};
+    withBye.forEach(function (p) {
+      byWeek[p.bye] = byWeek[p.bye] || [];
+      byWeek[p.bye].push(p);
+    });
+
+    var slots = state.rosterSlots;
+    var flexRequired = (slots.RB || 0) + (slots.WR || 0) + (slots.TE || 0) + (slots.FLEX || 0);
+
+    return Object.keys(byWeek).sort(function (a, b) { return parseFloat(a) - parseFloat(b); }).map(function (wk) {
+      var onBye = byWeek[wk];
+      var shortfalls = [];
+      STARTER_POSITIONS.forEach(function (pos) {
+        var required = slots[pos] || 0;
+        if (!required) return;
+        var totalAtPos = roster.players.filter(function (p) { return p.pos === pos; }).length;
+        var onByeAtPos = onBye.filter(function (p) { return p.pos === pos; }).length;
+        var available = totalAtPos - onByeAtPos;
+        if (available < required) {
+          shortfalls.push(pos + ": " + available + " of " + required + " needed available (" +
+            totalAtPos + " rostered, " + onByeAtPos + " on bye)");
+        }
+      });
+      if (flexRequired > 0) {
+        var totalFlexPool = roster.players.filter(function (p) { return FLEX_ELIGIBLE.indexOf(p.pos) !== -1; }).length;
+        var onByeFlexPool = onBye.filter(function (p) { return FLEX_ELIGIBLE.indexOf(p.pos) !== -1; }).length;
+        var availableFlex = totalFlexPool - onByeFlexPool;
+        if (availableFlex < flexRequired) {
+          shortfalls.push("RB/WR/TE incl. FLEX: " + availableFlex + " of " + flexRequired + " needed available");
+        }
+      }
+      return { week: wk, players: onBye, shortfalls: shortfalls };
+    });
+  }
+
+  function renderByeCheckTeamSelector() {
+    var sel = el("byeCheckTeam");
+    var cur = sel.value;
+    sel.innerHTML = "";
+    state.teamNames.forEach(function (name, i) {
+      var opt = document.createElement("option");
+      opt.value = i; opt.textContent = name;
+      sel.appendChild(opt);
+    });
+    sel.value = (cur !== "" && sel.querySelector("option[value='" + cur + "']")) ? cur : String(state.yourTeamIndex);
+  }
+
+  function renderByeCheck() {
+    renderByeCheckTeamSelector();
+    var teamIdx = parseInt(el("byeCheckTeam").value, 10) || 0;
+    var weeks = computeByeWeekIssues(teamIdx);
+    var out = el("byeCheckOutput");
+
+    if (!weeks.length) {
+      out.innerHTML = "<p class='small muted'>No known bye weeks among this team's picks yet — draft players whose imported rankings include a bye week.</p>";
+      return;
+    }
+
+    var anyIssues = weeks.some(function (w) { return w.shortfalls.length; });
+    var html = anyIssues ? "" :
+      "<p><span class='badge good'>No conflicts</span> <span class='small muted'>No bye week leaves this team short at a starting position.</span></p>";
+
+    html += "<div class='table-scroll'><table><thead><tr><th>Week</th><th>Players on bye</th><th>Status</th></tr></thead><tbody>";
+    weeks.forEach(function (w) {
+      var playersHtml = w.players.map(function (p) {
+        return escapeHtml(p.name) + " <span class='pos-pill pos-" + p.pos + "'>" + p.pos + "</span>";
+      }).join(", ");
+      var statusHtml = w.shortfalls.length
+        ? "<span class='badge bad'>" + w.shortfalls.length + " shortfall" + (w.shortfalls.length > 1 ? "s" : "") + "</span>" +
+          "<div class='hint'>" + w.shortfalls.map(function (s) { return escapeHtml(s); }).join("<br>") + "</div>"
+        : "<span class='badge good'>OK</span>";
+      html += "<tr><td>" + escapeHtml(w.week) + "</td><td>" + playersHtml + "</td><td>" + statusHtml + "</td></tr>";
+    });
+    html += "</tbody></table></div>";
+    out.innerHTML = html;
+  }
+
+  function renderGrades() {
+    var rosters = teamRosters();
+    var rows = [];
+    for (var t = 0; t < state.numTeams; t++) {
+      var roster = rosters[t] || { players: [] };
+      var valued = roster.players.filter(function (p) { return typeof p.rank === "number"; });
+      var values = valued.map(function (p) { return p.pickNumber - p.rank; });
+      var avg = values.length ? values.reduce(function (a, b) { return a + b; }, 0) / values.length : null;
+      var best = null, worst = null;
+      valued.forEach(function (p) {
+        var v = p.pickNumber - p.rank;
+        if (!best || v > best.v) best = { v: v, name: p.name };
+        if (!worst || v < worst.v) worst = { v: v, name: p.name };
+      });
+      rows.push({
+        team: state.teamNames[t] || ("Team " + (t + 1)),
+        picks: roster.players.length,
+        avg: avg,
+        best: best, worst: worst
+      });
+    }
+
+    var ranked = rows.filter(function (r) { return r.avg !== null; }).slice().sort(function (a, b) { return b.avg - a.avg; });
+    var gradeMap = {};
+    ranked.forEach(function (r, i) {
+      var frac = ranked.length > 1 ? i / (ranked.length - 1) : 0;
+      var grade;
+      if (frac < 0.1) grade = "A+";
+      else if (frac < 0.25) grade = "A";
+      else if (frac < 0.4) grade = "B+";
+      else if (frac < 0.55) grade = "B";
+      else if (frac < 0.7) grade = "C+";
+      else if (frac < 0.85) grade = "C";
+      else grade = "D";
+      gradeMap[r.team] = grade;
+    });
+
+    var body = el("gradesBody");
+    body.innerHTML = "";
+    rows.forEach(function (r) {
+      var tr = document.createElement("tr");
+      var grade = gradeMap[r.team] || "—";
+      var gradeBadge = grade === "—" ? "<span class='badge neutral'>—</span>" :
+        "<span class='badge " + (grade[0] === "A" ? "good" : (grade[0] === "D" || grade[0] === "C" ? "bad" : "neutral")) + "'>" + grade + "</span>";
+      tr.innerHTML = "<td>" + escapeHtml(r.team) + "</td>" +
+        "<td>" + r.picks + "</td>" +
+        "<td>" + (r.avg === null ? "—" : r.avg.toFixed(1)) + "</td>" +
+        "<td>" + gradeBadge + "</td>" +
+        "<td>" + (r.best ? escapeHtml(r.best.name) + " (+" + r.best.v.toFixed(1) + ")" : "—") + "</td>" +
+        "<td>" + (r.worst ? escapeHtml(r.worst.name) + " (" + r.worst.v.toFixed(1) + ")" : "—") + "</td>";
+      body.appendChild(tr);
+    });
+  }
+
+  // ---------- Analysis (best by position, tiers, NFL team depth charts) ----------
+  function renderAnalysisPosFilters() {
+    var wrap = el("analysisPosFilters");
+    wrap.innerHTML = "";
+    STARTER_POSITIONS.forEach(function (pos) {
+      var btn = document.createElement("button");
+      btn.textContent = pos;
+      if (pos === state.analysisPosFilter) btn.classList.add("active");
+      btn.addEventListener("click", function () {
+        state.analysisPosFilter = pos;
+        save();
+        renderTiersBody();
+      });
+      wrap.appendChild(btn);
+    });
+  }
+
+  function renderTiersBody() {
+    renderAnalysisPosFilters();
+    var body = el("tiersBody");
+    body.innerHTML = "";
+    var pos = state.analysisPosFilter;
+    var withPts = state.rankings.filter(function (p) { return p.pos === pos && typeof p.projPts === "number"; });
+    withPts.sort(function (a, b) { return b.projPts - a.projPts; });
+    if (!withPts.length) {
+      body.innerHTML = "<tr><td colspan='7' class='muted'>No " + pos +
+        " players with projected points yet — import projected points on the Setup tab.</td></tr>";
+      return;
+    }
+    var drafted = draftedNameSet();
+    var tiers = computeTiers(withPts);
+    tiers.forEach(function (tierPlayers, tierIdx) {
+      var trh = document.createElement("tr");
+      trh.className = "tier-header";
+      trh.innerHTML = "<td colspan='7'>Tier " + (tierIdx + 1) + "</td>";
+      body.appendChild(trh);
+      tierPlayers.forEach(function (p) {
+        var isDrafted = drafted.has(p.name.toLowerCase());
+        var tr = document.createElement("tr");
+        if (isDrafted) tr.style.opacity = ".6";
+        tr.innerHTML = "<td></td><td" + (isDrafted ? " class='drafted-name'" : "") + ">" + escapeHtml(p.name) + rookieBadgeHtml(p) + "</td>" +
+          "<td>" + escapeHtml(p.team) + "</td>" +
+          "<td>" + escapeHtml(p.bye) + "</td><td>" + p.projPts.toFixed(1) + "</td>" +
+          "<td>" + injuryBadgeHtml(p.injury) + "</td>" +
+          "<td>" + (isDrafted ? "<span class='badge neutral'>drafted</span>" : "") + "</td>";
+        body.appendChild(tr);
+      });
+    });
+  }
+
+  function renderDepthCharts() {
+    var grid = el("depthChartGrid");
+    grid.innerHTML = "";
+    var drafted = draftedNameSet();
+    var withPts = state.rankings.filter(function (p) { return typeof p.projPts === "number" && p.team; });
+    var byTeam = {};
+    withPts.forEach(function (p) {
+      var team = p.team.toUpperCase();
+      byTeam[team] = byTeam[team] || [];
+      byTeam[team].push(p);
+    });
+    var teams = Object.keys(byTeam).sort();
+    if (!teams.length) {
+      grid.innerHTML = "<p class='small muted'>No players with both a team and projected points yet.</p>";
+      return;
+    }
+    var posOrder = ["QB", "RB", "WR", "TE", "DST", "K"];
+    teams.forEach(function (team) {
+      var card = document.createElement("div");
+      card.className = "team-card";
+      var h4 = document.createElement("h4");
+      h4.textContent = team;
+      card.appendChild(h4);
+      var byPos = {};
+      byTeam[team].forEach(function (p) {
+        byPos[p.pos] = byPos[p.pos] || [];
+        byPos[p.pos].push(p);
+      });
+      posOrder.forEach(function (pos) {
+        var list = byPos[pos];
+        if (!list || !list.length) return;
+        list.sort(function (a, b) { return b.projPts - a.projPts; });
+        list.forEach(function (p, i) {
+          var isDrafted = drafted.has(p.name.toLowerCase());
+          var row = document.createElement("div");
+          row.className = "slot-row";
+          if (isDrafted) row.style.opacity = ".6";
+          row.innerHTML = "<span class='slot-name'>" + pos + (list.length > 1 ? (i + 1) : "") + "</span><span>" +
+            "<span" + (isDrafted ? " class='drafted-name'" : "") + ">" + escapeHtml(p.name) + "</span>" + rookieBadgeHtml(p) +
+            " <span class='muted small'>" + p.projPts.toFixed(1) + "</span></span>";
+          card.appendChild(row);
+        });
+      });
+      grid.appendChild(card);
+    });
+  }
+
+  function renderAnalysis() {
+    renderTiersBody();
+    renderDepthCharts();
+  }
+
+  // ---------- Event wiring ----------
+  function applyTeamCount() {
+    var n = Math.max(2, Math.min(20, parseInt(el("numTeams").value, 10) || 2));
+    state.numTeams = n;
+    var existing = state.teamNames || [];
+    var names = [];
+    for (var i = 0; i < n; i++) names.push(existing[i] || ("Team " + (i + 1)));
+    state.teamNames = names;
+    if (state.yourTeamIndex >= n) state.yourTeamIndex = 0;
+    save();
+    renderSetupInputs();
+    renderAllTeamSelectors();
+    renderDraft();
+    renderTeams();
+    renderGrades();
+  }
+
+  // Swaps two adjacent draft slots. Already-drafted picks are remapped along with the
+  // swap so a team keeps its own picks — only the slot (and therefore turn order) moves.
+  function moveTeam(i, dir) {
+    var j = i + dir;
+    if (j < 0 || j >= state.teamNames.length) return;
+    var tmp = state.teamNames[i];
+    state.teamNames[i] = state.teamNames[j];
+    state.teamNames[j] = tmp;
+    state.picks.forEach(function (p) {
+      if (p.teamIndex === i) p.teamIndex = j;
+      else if (p.teamIndex === j) p.teamIndex = i;
+    });
+    if (state.yourTeamIndex === i) state.yourTeamIndex = j;
+    else if (state.yourTeamIndex === j) state.yourTeamIndex = i;
+    save();
+    renderSetupInputs();
+    renderAllTeamSelectors();
+    renderDraft();
+    renderTeams();
+    renderGrades();
+  }
+
+  function wireEvents() {
+    el("applyTeamCount").addEventListener("click", applyTeamCount);
+
+    el("draftType").addEventListener("change", function () {
+      state.draftType = el("draftType").value;
+      save(); renderDraft();
+    });
+
+    el("yourTeam").addEventListener("change", function () {
+      state.yourTeamIndex = parseInt(el("yourTeam").value, 10) || 0;
+      save(); renderTeams(); renderDraft();
+    });
+
+    el("byeCheckTeam").addEventListener("change", renderByeCheck);
+
+    el("saveSetupBtn").addEventListener("click", function () {
+      applyTeamCount();
+      toast("Setup saved.");
+    });
+
+    el("resetDraftBtn").addEventListener("click", function () {
+      if (!confirm("Clear all draft picks? This cannot be undone.")) return;
+      state.picks = [];
+      save();
+      renderDraft(); renderTeams(); renderGrades();
+      toast("Draft reset.");
+    });
+
+    el("importCsvBtn").addEventListener("click", function () {
+      var result = parseCsv(el("csvInput").value);
+      if (!result.players.length) {
+        el("csvStatus").textContent = "Nothing imported. " + (result.errors[0] || "Check the CSV format.");
+        return;
+      }
+      state.rankings = result.players;
+      save();
+
+      // Rankings are a fresh player list, so any previously-matched projected points (and
+      // injuries) are gone from these new objects. Re-apply whatever's still in the projected
+      // points box so re-importing updated rankings (e.g. a refreshed ADP pull) doesn't silently
+      // drop points you already loaded.
+      var reMergeNote = "";
+      var projText = el("projPtsInput").value.trim();
+      if (projText) {
+        var projResult = parseProjPtsCsv(projText);
+        if (projResult.entries.length) {
+          var merge = mergeProjPts(projResult.entries);
+          save();
+          reMergeNote = " Re-matched " + merge.matched + " projected-points row(s) from the box below" +
+            (merge.ambiguous ? " (" + merge.ambiguous + " ambiguous)" : "") + ".";
+        }
+      }
+
+      renderRankingsPreview();
+      renderDraft();
+      renderAnalysis();
+      el("csvStatus").textContent = "Imported " + result.players.length + " players." +
+        (result.errors.length ? " (" + result.errors.length + " lines skipped)" : "") + reMergeNote;
+    });
+
+    el("csvFile").addEventListener("change", function (e) {
+      var file = e.target.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        el("csvInput").value = reader.result;
+        el("importCsvBtn").click();
+      };
+      reader.readAsText(file);
+    });
+
+    el("loadSampleBtn").addEventListener("click", function () {
+      el("csvInput").value = sampleCsv();
+      el("importCsvBtn").click();
+      toast("Sample data loaded — replace with your real rankings before drafting for real.");
+    });
+
+    el("clearRankingsBtn").addEventListener("click", function () {
+      if (!confirm("Clear all rankings?")) return;
+      state.rankings = [];
+      save();
+      renderRankingsPreview();
+      renderDraft();
+    });
+
+    el("fetchInjuriesBtn").addEventListener("click", fetchInjuries);
+
+    el("importProjPtsBtn").addEventListener("click", function () {
+      if (!state.rankings.length) { el("projPtsStatus").textContent = "Import rankings first."; return; }
+      var result = parseProjPtsCsv(el("projPtsInput").value);
+      if (!result.entries.length) {
+        el("projPtsStatus").textContent = "Nothing imported. " + (result.errors[0] || "Check the CSV format.");
+        return;
+      }
+      var merge = mergeProjPts(result.entries);
+      save();
+      renderRankingsPreview();
+      renderDraft();
+      renderAnalysis();
+      el("projPtsStatus").textContent = "Matched " + merge.matched + " of " + merge.total +
+        " projected-points rows to your rankings" +
+        (merge.ambiguous ? " (" + merge.ambiguous + " ambiguous match" + (merge.ambiguous > 1 ? "es" : "") +
+          " — picked first candidate, worth double-checking)" : "") +
+        (result.errors.length ? ". " + result.errors.length + " line(s) skipped." : ".");
+      toast("Projected points: " + merge.matched + " matched.");
+    });
+
+    el("projPtsFile").addEventListener("change", function (e) {
+      var file = e.target.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        el("projPtsInput").value = reader.result;
+        el("importProjPtsBtn").click();
+      };
+      reader.readAsText(file);
+    });
+
+    el("clearProjPtsBtn").addEventListener("click", function () {
+      if (!confirm("Clear all projected points?")) return;
+      state.rankings.forEach(function (p) { delete p.projPts; });
+      save();
+      renderRankingsPreview();
+      renderDraft();
+      renderAnalysis();
+      el("projPtsStatus").textContent = "";
+      toast("Projected points cleared.");
+    });
+
+    el("searchBox").addEventListener("input", function () {
+      state.search = el("searchBox").value;
+      renderDraft();
+    });
+
+    el("manualDraftBtn").addEventListener("click", function () {
+      var name = el("manualName").value.trim();
+      if (!name) { toast("Enter a player name."); return; }
+      draftPlayer({
+        name: name,
+        pos: el("manualPos").value,
+        team: el("manualTeam").value.trim()
+      }, true);
+      el("manualName").value = "";
+      el("manualTeam").value = "";
+    });
+
+    el("undoBtn").addEventListener("click", function () {
+      state.picks.pop();
+      save();
+      renderDraft(); renderTeams(); renderGrades();
+    });
+
+    el("exportCsvBtn").addEventListener("click", function () {
+      var lines = ["pick,round,team,player,position,nfl_team,rank_at_pick,manual"];
+      state.picks.forEach(function (p) {
+        var rp = roundAndPickInRound(p.pickNumber);
+        lines.push([p.pickNumber, rp.round, csvSafe(state.teamNames[p.teamIndex]), csvSafe(p.name),
+          p.pos, csvSafe(p.team), p.rank === null ? "" : p.rank, p.manual ? "yes" : "no"].join(","));
+      });
+      downloadFile("draft-log.csv", lines.join("\n"), "text/csv");
+    });
+  }
+
+  function csvSafe(s) {
+    s = String(s || "");
+    if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  }
+
+  function downloadFile(filename, content, mime) {
+    var blob = new Blob([content], { type: mime });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // ---------- Init ----------
+  function init() {
+    load();
+    if (!state.teamNames || !state.teamNames.length) {
+      state.teamNames = defaultTeamNames(state.numTeams);
+    }
+    renderTabs();
+    renderSetupInputs();
+    renderAllTeamSelectors();
+    renderRankingsPreview();
+    renderDraft();
+    renderTeams();
+    renderGrades();
+    wireEvents();
+    initVoice();
+    if (state.injuriesFetchedAt) {
+      el("injuryStatus").textContent = "Injury data last updated " + new Date(state.injuriesFetchedAt).toLocaleString() + ".";
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", init);
+})();
+</script>
+</body>
+</html>
