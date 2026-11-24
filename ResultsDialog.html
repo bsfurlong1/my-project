@@ -16,6 +16,7 @@
 
   <script>
     const SEASON = <?= season ?>;
+    const TIE_MARKER = '<?= tieMarker ?>';
 
     async function fetchWeek(week) {
       const url = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard'
@@ -40,12 +41,14 @@
             const home = comp.competitors.find(function (c) { return c.homeAway === 'home'; });
             const away = comp.competitors.find(function (c) { return c.homeAway === 'away'; });
             const winner = comp.competitors.find(function (c) { return c.winner === true; });
-            if (!winner) return; // tie, or data not settled yet
+            // A completed game with no winner is a tie - still report it (with a
+            // sentinel marker) rather than skipping it, so it doesn't look
+            // "not yet played" forever and permanently block later scoring.
             results.push({
               week: week,
               awayName: away.team.displayName,
               homeName: home.team.displayName,
-              winnerName: winner.team.displayName,
+              winnerName: winner ? winner.team.displayName : TIE_MARKER,
             });
           });
         } catch (err) {
