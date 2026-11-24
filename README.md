@@ -115,7 +115,11 @@ sheet derives who each person effectively picked as the winner of each of the
   placed before any outcome is known, so next week's bet size can't be set
   until this week is fully settled. A picked game with no odds data found is
   simply left out of that week's bet split; a week with nothing to bet on
-  leaves the bankroll unchanged.
+  leaves the bankroll unchanged. A game that ends in a **tie** resolves as a
+  **push** — the stake on that one game is returned, no win or loss — rather
+  than counting as "not yet decided," since a tie never gets a winner to
+  wait for (ties don't count for or against anyone on the Weekly Results
+  tab either, for the same reason).
 
   **Caveat on the odds data:** ESPN's betting-odds API shape wasn't
   verifiable while building this (no network access to espn.com from this
