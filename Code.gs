@@ -41,6 +41,7 @@ const TALLY_SHEET = 'Tally';
 const MEMBERS_SHEET = 'Members';
 const WEEKLY_RESULTS_SHEET = 'Weekly Results';
 const GAMBLING_SHEET = 'Gambling Analysis';
+const TIE_MARKER = 'TIE'; // Actual Winner value for a completed game with no winner
 const WEATHER_HISTORY_YEARS = 5;
 const STARTING_BANKROLL = 100;
 
@@ -235,6 +236,7 @@ function receiveScheduleFromClient(gamesJson, problemsJson) {
 function showUpdateResultsDialog() {
   const template = HtmlService.createTemplateFromFile('ResultsDialog');
   template.season = SEASON;
+  template.tieMarker = TIE_MARKER;
   const html = template.evaluate().setWidth(420).setHeight(220);
   SpreadsheetApp.getUi().showModalDialog(html, 'Fetching ' + SEASON + ' Results');
 }
@@ -995,7 +997,7 @@ function writeWeeklyResults(sheet, members, picksByGame, masterWeeks, actualWinn
     for (let g = 0; g < numGames; g++) {
       const winner = actualWinners[g];
       const pick = picksByGame[m][g];
-      if (!winner || !pick) continue;
+      if (!winner || !pick || winner === TIE_MARKER) continue; // a tie is a push - doesn't count for or against anyone
       const week = masterWeeks[g];
       playedPerWeek[m][week]++;
       if (pick === winner) correctPerWeek[m][week]++;
@@ -1178,6 +1180,7 @@ function simulateBankroll(picks, masterWeeks, actualWinners, masterAwayHome, awa
     const stake = bankroll / stakeableGames.length;
     let endBankroll = 0;
     stakeableGames.forEach(function (g) {
+      if (actualWinners[g] === TIE_MARKER) { endBankroll += stake; return; } // push: stake returned, no win or loss
       if (actualWinners[g] !== picks[g]) return; // bet lost, stake contributes 0
       const isAway = picks[g] === masterAwayHome[g][0];
       const moneyLine = isAway ? awayMoneyLines[g] : homeMoneyLines[g];
